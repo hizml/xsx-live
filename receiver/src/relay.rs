@@ -170,9 +170,23 @@ mod tests {
   assert_eq!(clock.timestamp(1_500_000,0),7000);
  }
  // 下面是端到端验证：把两段视频先后喂给真实的 ffmpeg，输出文件必须能完整解码。
+ // 测试用的音频包：libopus 编出来的一个 20 毫秒双声道 440 赫兹音频帧（160 字节）。
+ // 不用静音包，因为纯静音只有 3 个字节，ffmpeg 8 的解析器会把它判成非法
+ const TONE_PACKET_HEX:&str=concat!(
+  "bcb03243fc2d6222b45eee8e740bbc89002001fd4567dc6deedf7d3ab91ac3f2",
+  "a9204f35c4cddb264f931fd04f0200a4ca84fa150ae802485d9758b8293e20a7",
+  "0a71ca1fe8268e7c8614440db79d220e687f56d9dfd1a9016064b7140b778dfc",
+  "6995b7a957d61c5baf0c98ab9ff4ff26972777b456f615ebcbfae837b52771d3",
+  "728701ebce6c692b2a2cce9459fd2a63ff007616da0bea122ab19dc5291631ae",
+ );
+ fn hex_bytes(hex:&str)->Vec<u8>{
+  (0..hex.len()/2).map(|i|u8::from_str_radix(&hex[i*2..i*2+2],16).expect("十六进制字节")).collect()
+ }
  // 需要系统里有 ffmpeg（含 x264），默认跳过，在装了 ffmpeg 的容器里加 --ignored 运行
  static ENV_LOCK:std::sync::Mutex<()> = std::sync::Mutex::new(());
  const SWAP:usize=300;
+ // 一共喂进去 900 个音频包，转成 AAC 后实测 ffmpeg 6.1、7.1、8.0 都是 1405 帧。低于 1000 帧说明音频丢了
+ const AUDIO_MIN_FRAMES:usize=1000;
  // 用 x264 编一段每帧都带 AUD 的测试视频，加了噪点让码率不至于太低。
  // 带色彩描述时 SPS 里会多出 VUI，得到尺寸相同但内容不同的 SPS
  fn encode(size:&str,color:bool)->Vec<u8>{
@@ -193,48 +207,55 @@ mod tests {
  }
  fn first_sps(frame:&[u8])->&[u8]{nals(frame).into_iter().find(|n|n[0]&31==7).expect("帧里应有 SPS")}
  fn has_idr(frame:&[u8])->bool{nals(frame).iter().any(|n|n[0]&31==5)}
- // 返回（输出里解码出的帧数，ffmpeg 与 ffprobe 的报错文本）
- fn run_pipeline(tag:&str,before:&[Vec<u8>],after:&[Vec<u8>])->(usize,String){
+ // 数一数输出文件里某一路流实际能解码出多少帧
+ fn count_decoded(out:&std::path::Path,stream:&str)->usize{
+  let probe=Command::new("/usr/bin/ffprobe").args(["-v","error","-count_frames","-select_streams",stream,"-show_entries","stream=nb_read_frames","-of","csv=p=0"]).arg(out).output().expect("运行 ffprobe");
+  String::from_utf8_lossy(&probe.stdout).trim().trim_matches('"').parse().unwrap_or(0)
+ }
+ // 跑一遍完整的分发链路，再数输出里能解码出多少帧。日志文本只带在结果里帮助排查，不拿它判断成败：
+ // ffmpeg 8 在流结束、清空 Opus 解析器时会打一条多余的 Error parsing Opus packet header，实际音频是完整的
+ fn run_pipeline(tag:&str,before:&[Vec<u8>],after:&[Vec<u8>])->Decoded{
   let _env=ENV_LOCK.lock().unwrap();
   let dir=std::env::temp_dir().join(format!("xsx-relay-{tag}-{}",std::process::id()));
   std::fs::create_dir_all(&dir).unwrap();
   unsafe{std::env::set_var("STATE_DIR",&dir);}
   let out=dir.join("out.flv");
   let mut relay=MediaRelay::new(out.to_str().unwrap()).unwrap();
+  let tone=hex_bytes(TONE_PACKET_HEX);
   let mut time=0u64;
   for (index,frame) in before.iter().take(SWAP).chain(after.iter()).enumerate(){
    // 切换编码参数时源时间戳从头开始，模拟主机重新配置编码器
    if index==SWAP{time=0;}
-   let silence=[0xF8u8,0xFF,0xFE];
-   relay.audio(Sample{data:&silence,time,is_contiguous:true,is_keyframe:false}).unwrap();
+   relay.audio(Sample{data:&tone,time,is_contiguous:true,is_keyframe:false}).unwrap();
    relay.video(Sample{data:frame,time,is_contiguous:true,is_keyframe:has_idr(frame)}).unwrap();
    relay.tick().expect("ffmpeg 不应退出");
    time+=33_333;
   }
   let written=relay.video_frames as usize;
   relay.finish();
-  let probe=Command::new("/usr/bin/ffprobe").args(["-v","error","-count_frames","-select_streams","v:0","-show_entries","stream=nb_read_frames","-of","csv=p=0"]).arg(&out).output().expect("运行 ffprobe");
-  let problems=format!("{}{}",std::fs::read_to_string(dir.join("ffmpeg.log")).unwrap_or_default(),String::from_utf8_lossy(&probe.stderr));
+  let video=count_decoded(&out,"v:0");
+  let audio=count_decoded(&out,"a:0");
+  let logs=std::fs::read_to_string(dir.join("ffmpeg.log")).unwrap_or_default();
   let _=std::fs::remove_dir_all(&dir);
-  let decoded=String::from_utf8_lossy(&probe.stdout).trim().trim_matches('"').to_owned();
-  (decoded.parse().unwrap_or(0),format!("{written} 帧写入；{problems}"))
+  Decoded{video,audio,report:format!("{written} 帧写入；{logs}")}
  }
+ struct Decoded{video:usize,audio:usize,report:String}
  #[test] #[ignore="需要系统里有 ffmpeg"]
  fn ffmpeg_survives_sps_change_with_same_size(){
   let (before,after)=(frames(&encode("320x180",false)),frames(&encode("320x180",true)));
   let (sps_before,sps_after)=(first_sps(&before[0]).to_vec(),first_sps(&after[0]).to_vec());
   assert_eq!(dimensions(&sps_before).unwrap(),dimensions(&sps_after).unwrap(),"两段视频的尺寸应当相同");
   assert_ne!(sps_before,sps_after,"两段视频的 SPS 应当不同");
-  let (count,report)=run_pipeline("same-size",&before,&after);
-  assert_eq!(count,SWAP+after.len(),"输出里解码出的帧数不对：{report}");
-  assert!(!report.to_lowercase().contains("error"),"{report}");
+  let decoded=run_pipeline("same-size",&before,&after);
+  assert_eq!(decoded.video,SWAP+after.len(),"输出里解码出的视频帧数不对：{}",decoded.report);
+  assert!(decoded.audio>=AUDIO_MIN_FRAMES,"输出里解码出的音频帧数太少：{}",decoded.report);
  }
  #[test] #[ignore="需要系统里有 ffmpeg"]
  fn ffmpeg_survives_resolution_change(){
   let (before,after)=(frames(&encode("320x180",false)),frames(&encode("256x144",false)));
   assert_eq!(sps_sizes(first_sps(&before[0]),first_sps(&after[0])).unwrap(),((320,180),(256,144)));
-  let (count,report)=run_pipeline("new-size",&before,&after);
-  assert_eq!(count,SWAP+after.len(),"输出里解码出的帧数不对：{report}");
-  assert!(!report.to_lowercase().contains("error"),"{report}");
+  let decoded=run_pipeline("new-size",&before,&after);
+  assert_eq!(decoded.video,SWAP+after.len(),"输出里解码出的视频帧数不对：{}",decoded.report);
+  assert!(decoded.audio>=AUDIO_MIN_FRAMES,"输出里解码出的音频帧数太少：{}",decoded.report);
  }
 }
