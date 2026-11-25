@@ -1,0 +1,13 @@
+# 构建上下文是整个仓库，这里排除不该进镜像、也不该离开本机的东西
+.git
+**/*.log
+**/*.tar
+**/*.tar.gz
+receiver/target
+# 运行时数据：凭据和状态只存在于部署机器上
+xsx-files
+auth/*
+!auth/.gitignore
+!auth/session.json.example
+state/*
+!state/.gitignore

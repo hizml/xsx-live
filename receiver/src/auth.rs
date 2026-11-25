@@ -1,12 +1,14 @@
 use crate::error::{Result,XboxError};
 use chrono::{DateTime,Utc};
 use serde_json::{Value,json};
-use std::{path::PathBuf,sync::Arc,os::unix::fs::OpenOptionsExt,io::Write};
-use tokio::sync::Mutex;
+use std::{path::PathBuf,os::unix::fs::OpenOptionsExt,io::Write};
 #[derive(Clone)]
-pub struct XboxAuth { path:PathBuf, guard:Arc<Mutex<()>> }
+pub struct XboxAuth { path:PathBuf }
+// 凭据文件的互斥锁。续期和「管理页登录成功后整体替换凭据」都要拿它，
+// 避免新的凭据被一次尚未结束的续期覆盖回去
+static SESSION_LOCK:tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 impl XboxAuth {
- pub fn new()->Self{Self{path:std::env::var_os("XBOX_AUTH_FILE").map(PathBuf::from).unwrap_or_else(||PathBuf::from("/auth/session.json")),guard:Arc::new(Mutex::new(()))}}
+ pub fn new()->Self{Self{path:std::env::var_os("XBOX_AUTH_FILE").map(PathBuf::from).unwrap_or_else(||PathBuf::from("/auth/session.json"))}}
  fn read(&self)->Result<Value>{Ok(serde_json::from_slice(&std::fs::read(&self.path)?)?)}
  fn save(&self,d:&Value)->Result<()>{
   let tmp=self.path.with_extension(format!("tmp-{}",std::process::id()));
@@ -37,12 +39,17 @@ impl XboxAuth {
   let x=Self::json_response(client.post("https://xsts.auth.xboxlive.com/xsts/authorize").header("x-xbl-contract-version","1").json(&body).send().await?).await?;
   if !x["Token"].is_string()||!x["NotAfter"].is_string()||!x["DisplayClaims"]["xui"][0]["uhs"].is_string(){return Err(XboxError::AuthError("Xbox streaming response incomplete".into()));}
   d["xsts_token"]=x["Token"].clone();d["expires_at"]=x["NotAfter"].clone();d["user_hash"]=x["DisplayClaims"]["xui"][0]["uhs"].clone();self.save(d)?;
-  println!("AUTH refreshed=true");Ok(())
+  crate::log!("AUTH refreshed=true");Ok(())
  }
  pub async fn get_auth_header(&self)->Result<String>{
-  let _guard=self.guard.lock().await;let mut d=self.read()?;
+  let _session=SESSION_LOCK.lock().await;let mut d=self.read()?;
   let remaining=d["expires_at"].as_str().and_then(|s|DateTime::parse_from_rfc3339(s).ok()).map(|t|t.timestamp()-Utc::now().timestamp()).unwrap_or(0);
   if remaining<300||!d["xsts_token"].is_string(){self.refresh(&mut d).await?;}
   d["xsts_token"].as_str().map(str::to_owned).ok_or_else(||XboxError::AuthError("Streaming authorization unavailable".into()))
+ }
+ // 用登录流程拿到的新凭据整体替换凭据文件，旧的续期信息一并丢弃
+ pub async fn store_session(&self,client_id:&str,refresh_token:&str,scope:&str)->Result<()>{
+  let _session=SESSION_LOCK.lock().await;
+  self.save(&json!({"client_id":client_id,"refresh_token":refresh_token,"scope":scope}))
  }
 }

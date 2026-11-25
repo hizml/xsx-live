@@ -1,14 +1,45 @@
-name: xsx-live
-
+# xsx-live：Xbox 串流接收与局域网分发。推荐用 Docker Compose 安装，这个文件就是示例配置。
+#
+# 三种装法用的都是这一份文件：
+#   1. 本机编译：直接 docker compose up -d，第一次会编译接收端（receiver/Dockerfile，
+#      管理页和播放页在编译时编进程序）
+#   2. 用现成的镜像包：先 docker load -i xsx-live-receiver-<版本>.tar（NAS 上可以在
+#      Container Station 这类界面里导入），得到 xsx-live/receiver:latest，再 docker compose up -d
+#   3. 从镜像仓库拉取：在 .env 里把 XSX_IMAGE 设成 ghcr.io/<账号>/xsx-live-receiver:<版本>，
+#      然后 docker compose pull && docker compose up -d
+#
+# 数据目录 ./xsx-files 会自动生成，里面是凭据（auth）、运行状态（state）和播放页（www），
+# 不需要提前放任何文件。凭据在管理页里登录一次就有（见 README）。
 services:
   media:
     image: ossrs/srs:5
     container_name: xsx-media
     restart: unless-stopped
-    command: ["./objs/srs", "-c", "conf/xsx.conf"]
+    # 分发服务的配置写在下面的环境变量里。-e 表示只用环境变量，不需要配置文件
+    command: ["./objs/srs", "-e"]
+    environment:
+      SRS_LISTEN: "1935"
+      SRS_DAEMON: "off"
+      SRS_SRS_LOG_TANK: console
+      SRS_SRS_LOG_LEVEL: warn
+      SRS_MAX_CONNECTIONS: "100"
+      SRS_HTTP_API_ENABLED: "on"
+      SRS_HTTP_API_LISTEN: "1985"
+      SRS_HTTP_API_CROSSDOMAIN: "on"
+      SRS_HTTP_SERVER_ENABLED: "on"
+      SRS_HTTP_SERVER_LISTEN: "8080"
+      SRS_HTTP_SERVER_DIR: ./objs/nginx/html
+      SRS_VHOST_TCP_NODELAY: "on"
+      SRS_VHOST_MIN_LATENCY: "on"
+      SRS_VHOST_PLAY_GOP_CACHE: "off"
+      SRS_VHOST_PLAY_QUEUE_LENGTH: "1"
+      SRS_VHOST_PLAY_MW_LATENCY: "100"
+      SRS_VHOST_PUBLISH_MR: "off"
+      SRS_VHOST_HTTP_REMUX_ENABLED: "on"
+      SRS_VHOST_HTTP_REMUX_MOUNT: "/[app]/[stream].flv"
     volumes:
-      - ./srs.conf:/usr/local/srs/conf/xsx.conf:ro
-      - ./www:/usr/local/srs/objs/nginx/html/xsx:ro
+      # 播放页的文件由接收端在启动时写进这个目录
+      - ./xsx-files/www:/usr/local/srs/objs/nginx/html/xsx:ro
     ports:
       - "${BIND_IP:-0.0.0.0}:1935:1935/tcp"
       - "${BIND_IP:-0.0.0.0}:8888:8080/tcp"
@@ -20,30 +51,38 @@ services:
         max-file: "2"
 
   receiver:
-    image: xsx-native:local
+    # 镜像名默认是 xsx-live/receiver:latest，和 GitHub Actions 导出的镜像包一致。
+    # 本机没有这个镜像时，docker compose up 会按下面的 build 自己编译
+    image: ${XSX_IMAGE:-xsx-live/receiver:latest}
     build:
-      context: ./receiver
+      # 构建上下文是整个仓库
+      context: .
+      dockerfile: receiver/Dockerfile
     container_name: xsx-receiver
     restart: unless-stopped
     init: true
     network_mode: host
     read_only: true
+    # 进程已丢弃全部能力；数据目录里的文件属主未必是 root，没有 DAC_OVERRIDE 会读写不了
     cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
     environment:
       XBOX_IP: "${XBOX_IP:-192.168.1.180}"
-      XBOX_AUTH_FILE: /auth/session.json
-      STATE_DIR: /state
+      # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好
+      XBOX_AUTH_FILE: /files/auth/session.json
+      STATE_DIR: /files/state
+      WWW_DIR: /files/www
+      # 监听在本机所有地址上，用任何一个 IP 都能打开管理页；用域名访问不了
       DASHBOARD_BIND: "${DASHBOARD_BIND:-0.0.0.0:8099}"
-      DASHBOARD_DIR: /dashboard
       MEDIA_HTTP_BASE: "${MEDIA_HTTP_BASE:-http://127.0.0.1:8888}"
       OUTPUT_RTMP: "${OUTPUT_RTMP:-rtmp://127.0.0.1:1935/live/xsx}"
+      # 日志带本地时间
+      TZ: "${TZ:-Asia/Shanghai}"
     volumes:
-      - ./auth:/auth
-      - ./state:/state
-      - ./dashboard:/dashboard:ro
+      - ./xsx-files:/files
     depends_on:
       - media
     healthcheck:

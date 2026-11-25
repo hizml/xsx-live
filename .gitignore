@@ -1,3 +1,6 @@
+# 数据目录：凭据、运行状态和自动生成的播放页，只存在于部署机器上，绝不提交
+xsx-files/
+
 # Credentials and private authentication
 auth/session.json
 auth/*.json

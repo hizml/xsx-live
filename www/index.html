@@ -1,23 +1,60 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XSX 局域网直播画面</title>
-<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{width:100%;height:100%;object-fit:contain}#status,#sound{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font:20px system-ui;color:white;background:#171b22;padding:18px 24px;border:0;border-radius:10px}#sound{cursor:pointer}*[hidden]{display:none!important}</style></head>
-<body><video id="video" autoplay playsinline></video><div id="status">正在连接 XSX…</div><button id="sound" hidden>点击开启声音</button>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+video{width:100%;height:100%;object-fit:contain}
+#status{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font:20px system-ui;color:white;background:#171b22;padding:18px 24px;border:0;border-radius:10px}
+#controls{position:fixed;right:16px;bottom:16px;display:flex;gap:8px;opacity:0;pointer-events:none;transition:opacity .3s}
+#controls.is-visible,#controls:focus-within{opacity:1;pointer-events:auto}
+#controls button{padding:10px 14px;border:0;border-radius:8px;background:rgba(23,27,34,.75);color:white;font:14px system-ui;cursor:pointer}
+*[hidden]{display:none!important}
+</style></head>
+<body><video id="video" autoplay playsinline></video><div id="status">正在连接 XSX…</div><div id="controls"><button id="sound" type="button" aria-pressed="false">声音 关</button><button id="fullscreen" type="button">全屏</button></div>
 <script src="vendor/mpegts-1.8.2.js"></script><script>
 'use strict';
-const video=document.getElementById('video'),status=document.getElementById('status'),sound=document.getElementById('sound');
-let player=null,retry=null,lastTime=-1,lastProgress=Date.now();
-video.muted=new URLSearchParams(location.search).get('audio')==='0';
+// 控制条停下多少毫秒后隐藏；画面停住多少毫秒后重连
+const CONTROLS_VISIBLE_MS=2500,STALL_MS=12000,RECONNECT_DELAY_MS=2000,POLL_MS=2000;
+const SOUND_LABELS={muted:'声音 关',on:'声音 开'};
+const video=document.getElementById('video'),status=document.getElementById('status'),sound=document.getElementById('sound'),fullscreen=document.getElementById('fullscreen'),controls=document.getElementById('controls');
+let player=null,retry=null,lastTime=-1,lastProgress=Date.now(),controlsTimer=null;
+// 默认静音；网址带 ?audio=1 时才一打开就带声音（直播软件里的浏览器来源用得上），
+// 被浏览器拦下的话仍会退回静音
+video.muted=new URLSearchParams(location.search).get('audio')!=='1';
 function dispose(){if(player){try{player.unload();player.detachMediaElement();player.destroy();}catch(e){}player=null;}}
-function reconnect(){if(retry)return;status.textContent='等待 XSX 画面，正在重连…';status.hidden=false;dispose();retry=setTimeout(()=>{retry=null;connect();},2000);}
-function play(){if(!player)return;player.play().catch(()=>{video.muted=true;sound.hidden=false;if(player)player.play().catch(()=>{});});}
+function reconnect(){if(retry)return;status.textContent='等待 XSX 画面，正在重连…';status.hidden=false;dispose();retry=setTimeout(()=>{retry=null;connect();},RECONNECT_DELAY_MS);}
+// 按钮上如实显示当前是开是关
+function renderSound(){sound.textContent=video.muted?SOUND_LABELS.muted:SOUND_LABELS.on;sound.setAttribute('aria-pressed',String(!video.muted));}
+// 浏览器一般不允许一打开就带声音播放；被拦下就先静音播放，等用户点按钮
+// 只有浏览器拒绝自动带声音播放时才退回静音；别的原因（比如还没有画面）保持用户的选择
+function isAutoplayBlocked(error){return Boolean(error)&&error.name==='NotAllowedError';}
+function play(){if(!player)return;player.play().then(renderSound).catch((error)=>{if(isAutoplayBlocked(error)){video.muted=true;renderSound();if(player)player.play().catch(()=>{});}});}
+function toggleSound(){
+ video.muted=!video.muted;renderSound();
+ if(video.muted)return;
+ video.play().catch((error)=>{if(isAutoplayBlocked(error)){video.muted=true;renderSound();video.play().catch(()=>{});}});
+}
 function connect(){
  if(!window.mpegts||!mpegts.getFeatureList().mseLivePlayback){status.textContent='当前浏览器不支持 MSE 网络视频';return;}
  dispose();lastProgress=Date.now();lastTime=-1;
  player=mpegts.createPlayer({type:'flv',url:location.origin+'/live/xsx.flv',isLive:true,hasAudio:true,hasVideo:true},{enableWorker:true,enableStashBuffer:false,lazyLoad:false,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:1.5,liveBufferLatencyMinRemain:0.5,autoCleanupSourceBuffer:true});
  player.on(mpegts.Events.ERROR,()=>reconnect());player.attachMediaElement(video);player.load();play();
 }
-sound.onclick=()=>{video.muted=false;video.play().then(()=>sound.hidden=true).catch(()=>{});};
+function toggleFullscreen(){
+ const exit=document.exitFullscreen||document.webkitExitFullscreen;
+ if(document.fullscreenElement||document.webkitFullscreenElement){if(exit)exit.call(document);return;}
+ // 整页进入全屏，这样右下角的控制条在全屏下仍然可用；iPhone 不支持整页全屏，退回到视频自带的全屏
+ const request=document.documentElement.requestFullscreen||document.documentElement.webkitRequestFullscreen;
+ if(request){const pending=request.call(document.documentElement);if(pending&&pending.catch)pending.catch(()=>{});}else if(video.webkitEnterFullscreen)video.webkitEnterFullscreen();
+}
+// 控制条在鼠标或手指动一下时出现，停下几秒后自动隐藏，不挡画面
+function revealControls(){controls.classList.add('is-visible');clearTimeout(controlsTimer);controlsTimer=setTimeout(()=>controls.classList.remove('is-visible'),CONTROLS_VISIBLE_MS);}
+sound.onclick=toggleSound;fullscreen.onclick=toggleFullscreen;video.addEventListener('dblclick',toggleFullscreen);
+for(const name of ['pointermove','pointerdown'])document.addEventListener(name,revealControls);
 video.addEventListener('playing',()=>{status.hidden=true;lastProgress=Date.now();});
-setInterval(()=>{if(!player||video.paused)return;if(video.currentTime!==lastTime){lastTime=video.currentTime;lastProgress=Date.now();}else if(Date.now()-lastProgress>12000){reconnect();}},2000);
-window.addEventListener('beforeunload',()=>{clearTimeout(retry);dispose();});connect();
+setInterval(()=>{
+ if(!player||video.paused)return;
+ if(video.currentTime!==lastTime){lastTime=video.currentTime;lastProgress=Date.now();}else if(Date.now()-lastProgress>STALL_MS){reconnect();}
+},POLL_MS);
+window.addEventListener('beforeunload',()=>{clearTimeout(retry);dispose();});
+renderSound();revealControls();connect();
 </script></body></html>

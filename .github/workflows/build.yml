@@ -1,0 +1,97 @@
+# 在 GitHub 的服务器上跑测试、编译并打包接收端镜像（linux/amd64）。
+# 触发：推送 v 开头的标签，或者在 Actions 页面手动点 Run workflow 并填版本号。
+# 产物：
+#   ghcr.io/<账号>/xsx-live-receiver:<版本> 和 :latest
+#   一个可以直接导入 Container Station 的镜像包（手动运行时是构建产物，打标签时挂到 Release 上）
+name: 构建接收端镜像
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本号，用作镜像标签，例如 v8
+        required: true
+        type: string
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/xsx-live-receiver
+  IMPORT_NAME: xsx-live/receiver
+
+jobs:
+  test:
+    name: 测试
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: receiver
+    steps:
+      - uses: actions/checkout@v4
+      # 两个端到端测试要用系统的 ffmpeg
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: cargo test --locked
+      - run: cargo test --locked -- --ignored
+
+  build:
+    name: 编译并打包
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        # 版本号必须和 receiver/Cargo.toml 里的一致（Git 标签就是 v 加上它）。
+        # 输入先放进环境变量再比较，不把它直接拼进命令里
+        env:
+          RAW_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          expected="v$(sed -n 's/^version = "\(.*\)"$/\1/p' receiver/Cargo.toml | head -1)"
+          if [ "$RAW_VERSION" != "$expected" ]; then
+            echo "::error::版本号（$RAW_VERSION）和 receiver/Cargo.toml 里的（$expected）不一致，先改 Cargo.toml 再打标签"
+            exit 1
+          fi
+          echo "version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: receiver/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          # 写进镜像标签的版本号、提交号和仓库地址
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            REVISION=${{ github.sha }}
+            SOURCE=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: 导出可导入 Container Station 的镜像包
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker pull "$IMAGE:$VERSION"
+          # 导入 Container Station 时镜像名要是两段名，和 compose 里写的一致
+          docker tag "$IMAGE:$VERSION" "$IMPORT_NAME:latest"
+          docker save "$IMPORT_NAME:latest" | gzip > "xsx-live-receiver-$VERSION.tar.gz"
+          tar -tzf "xsx-live-receiver-$VERSION.tar.gz" | head -20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xsx-live-receiver-${{ steps.version.outputs.version }}
+          path: xsx-live-receiver-${{ steps.version.outputs.version }}.tar.gz
+          retention-days: 90
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: xsx-live-receiver-*.tar.gz
