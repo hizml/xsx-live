@@ -10,25 +10,53 @@
 > **极低开销、视频零转码、2K 60fps 原画** 的 Xbox 局域网 WebRTC 接收器与流媒体中枢。
 > 专为 OBS、抖音直播伴侣、局域网流媒体分发设计。
 
+**项目简介**：把 Xbox Series X|S 的画面和声音接收到局域网内的 NAS 或电脑上，转成一路直播流，供抖音直播伴侣、OBS 等直播软件取用，也可以直接用浏览器观看。音视频只在局域网内传输，不影响在主机上用手柄正常游戏。
+
 ---
 
 ## 🌟 项目亮点
 
-* **🚀 视频零转码（Stream Copy）**：直接从 Xbox WebRTC 媒体流取出 H.264 视频帧原样转封装，**不解码、不重编码、没有画质损失**，也不需要显卡。只有音频从 Opus 转成 AAC。
-* **⚡ 很轻量**：接收端用 Rust 写成（基于 `str0m` WebRTC 协议栈），分发服务是 SRS 5。待机内存约 10 MB；串流时的占用取决于机器，原项目给的参考值是内存约 40 MB、单核 CPU 约 15%。
-* **🎛️ 现代化 Web 控制面板**：提供直观的 Web 管理界面（默认端口 `8099`），支持一键启停串流、断线重连、实时帧率/码率监控与静音画面预览。
-* **🎬 丰富的播放与拉流协议**：同时支持 HTTP-FLV、RTMP、以及集成自托管 `mpegts.js` 的低延迟浏览器播放页。
-* **🔒 音视频只走局域网**：登录、建会话和少量心跳走互联网；音视频在主机和接收端之间局域网直连，不经过公网中继。
-* **🎮 不占手柄**：接收端平时不发送任何手柄数据，不影响在主机上用物理手柄玩游戏。只有刚连上时「打个招呼」，以及长时间没人操作、主机要结束会话时，才会动一下摇杆。
-* **🔐 管理页内登录微软账号**：不需要任何脚本或手工编辑凭据文件。
-* **📦 开箱即用**：数据目录自动生成，装好就能用；主机关机时串流自动停止，可选下次开机是否自动开始。
-* **🌐 中英文界面**：管理页和播放页都有中文、英文两种文字，管理页可以随时切换。
+* **🚀 视频零转码（Stream Copy）**：Xbox 输出的 H.264 视频帧原样转封装，不解码、不重编码，**无画质损失，也不需要 GPU**。仅音频从 Opus 转为 AAC。
+* **⚡ 轻量**：接收端基于 Rust（`str0m` WebRTC 协议栈），分发服务为 SRS 5。待机内存约 10 MB；串流时的占用与机器有关，原项目给出的参考值约为内存 40 MB、单核 CPU 15%。
+* **🎛️ Web 管理页**：启停串流、断线重连、实时帧率/码率、静音预览。默认地址 `http://<YOUR_HOST_IP>:8099/`。
+* **🎬 多种拉流方式**：HTTP-FLV、RTMP，以及内置 `mpegts.js` 的浏览器播放页。
+* **🔒 音视频只走局域网**：只有登录、建立会话和心跳走互联网；音视频在主机与接收端之间局域网直连，不经公网中继。
+* **🎮 不占手柄**：接收端平时不发送手柄数据，不影响物理手柄。仅在建立连接时注册一次虚拟手柄，以及长时间无操作、主机即将断开会话时轻推摇杆。
+* **🔐 管理页内登录微软账号**：无需脚本，也无需手动编辑凭据文件。
+* **📦 开箱即用**：数据目录自动生成；主机关机时串流自动停止，可选择下次开机是否自动开始。
+* **🌐 中英文界面**：管理页与播放页均支持中文和英文，管理页可随时切换。
+
+---
+
+## 📖 术语
+
+下文反复出现的几个词：
+
+| 术语 | 含义 |
+| :--- | :--- |
+| 镜像 | 包含程序及其运行环境的只读文件包，导入后即可运行。接收端镜像为 `xsx-live/receiver` |
+| 容器 | 镜像的运行实例。本服务包含两个容器：接收端 `xsx-receiver` 和分发服务 `xsx-media` |
+| compose 文件 | 描述要启动哪些容器及其配置的 YAML 文件：通用的 `docker-compose.yml`，或 NAS 用的 `docker-compose.nas.yml` |
+| 接收端 | 连接 Xbox、接收音视频并推流给分发服务的程序，同时提供管理页 |
+| 分发服务 | 接收推流，并向直播软件、播放页提供拉流的服务，使用 SRS |
+| 管理页 | 启停串流、登录账号、查看状态的网页，默认地址 `http://<YOUR_HOST_IP>:8099/` |
+| 播放页 | 用浏览器直接观看画面的网页，默认地址 `http://<YOUR_HOST_IP>:8888/xsx/index.html` |
+| 推流 / 拉流 | 推流是发布音视频流，拉流是接收音视频流。接收端推流，直播软件和播放页拉流 |
+| RTMP / HTTP-FLV | 两种流媒体传输协议，直播软件通常至少支持其中一种 |
+| 转码 / 转封装 | 转码会重新编码，消耗 CPU 且可能有画质损失；转封装只改变封装格式，不重新编码 |
+| 环境变量 | 传给程序的配置项，写在 compose 文件的 `environment:` 下，每项的含义在该文件中均有注释 |
+| 数据目录 | 存放凭据、运行状态和播放页的目录，自动生成。通用 compose 文件下是文件旁的 `xsx-files/`，NAS 版固定为 `/share/ContainerStation/xsx-live/xsx-files` |
+| 凭据 | 登录后保存的长期令牌，存于 `xsx-files/auth/session.json`，由接收端自动续期 |
+| 镜像仓库 | 存放镜像的服务。`ghcr.io` 由 GitHub 运营，Docker Hub 由 Docker 运营 |
+| Release | GitHub 上的发布页，每个版本一个，附有可导入的镜像包 |
+
+地址中的 `<YOUR_HOST_IP>` 指运行这套服务的机器的局域网 IP。
 
 ---
 
 ## 📐 架构设计
 
-整套服务由两个容器组成，用一份 `docker-compose.yml` 编排：
+整套服务由两个容器组成，用一份 compose 文件编排：
 
 | 容器 | 内容 | 作用 |
 | :--- | :--- | :--- |
@@ -81,7 +109,7 @@ sequenceDiagram
 
 几个要点：
 
-* **联网的很少**：互联网上只走登录、建会话，以及串流期间很小的心跳（给会话续命、查主机电源状态）。管理页用授权码加 PKCE 的方式登录微软账号，长期凭据保存在 `xsx-files/auth/session.json`，之后接收端自动续期。建会话靠 Xbox 的远程串流接口（xHome）：接收端通过它创建会话，并和主机交换 WebRTC 的连接参数（ICE、SDP）。连接建好后，画面和声音在主机与接收端之间走局域网直连，不经过公网中继，所以延迟低，也不占外网带宽。
+* **联网的很少**：互联网上只走登录、建会话，以及串流期间很小的心跳（给会话续命、查主机电源状态）。管理页用 OAuth 授权码加 PKCE 的方式登录微软账号，密码只在微软页面输入，长期凭据保存在 `xsx-files/auth/session.json`，之后接收端自动续期。建会话靠 Xbox 的远程串流接口（xHome）：接收端通过它创建会话，并和主机交换 WebRTC 的连接参数（ICE、SDP，即建立直连所需的地址和参数）。连接建好后，画面和声音在主机与接收端之间走局域网直连，不经过公网中继，所以延迟低，也不占外网带宽。
 * **视频不转码**：接收端把收到的 H.264 视频帧原样封装成 Matroska 交给 ffmpeg，ffmpeg 用 `-c:v copy` 直接写进 RTMP，不解码也不重编码，所以不需要显卡。只有音频从 Opus 转成 AAC，因为直播软件普遍只认 AAC。
 * **平时不碰手柄**：接收端不发任何手柄数据。只有两种情况会动一下：刚连上时「打个招呼」，免得被当成没有客户端踢掉；约 10 分钟没人碰手柄、主机要踢人时，轻推一下左摇杆。细节见下文「手柄与保活」。
 * **关机会让串流自己停**：主机关机时会通知接收端，接收端结束会话并等主机彻底断电，不会把它重新连住。之后开不自动开始，由管理页的「开机自动串流」开关决定。
@@ -104,33 +132,40 @@ sequenceDiagram
 
 ## 🚀 快速上手
 
-先确认三件事：
+开始之前确认：
 
-* 有一台 Xbox Series X|S，和运行这套服务的机器在**同一个局域网**里。主机要自己开机，接收端不会唤醒它。
-* 有一个微软账号，就是 Xbox 主机上登录的那个。
-* 机器上装好了 Docker 和 Docker Compose，并且能访问微软的登录和服务（要联网）。
+* 一台 Xbox Series X|S，与运行这套服务的机器在**同一个局域网**内，并处于开机状态（接收端不会唤醒主机）。
+* 一个微软账号，即 Xbox 主机上登录的账号。
+* 机器上已安装 Docker 和 Docker Compose（Container Station 已包含），并且能访问微软的登录和服务。
 
-一共有三种装法，区别只在接收端镜像从哪来。**用 NAS 或者不想编译的，选方式 A**。从第 2 步起，三种方式完全一样。
+有三种装法，区别只在接收端镜像的来源。**NAS 上用方式 A**，只需要修改两处配置。
 
-### 第 1 步：拿到接收端镜像
+### 方式 A：在 NAS 上安装（推荐）
 
-#### 方式 A：导入现成的镜像包（NAS 推荐）
+以 QNAP Container Station 为例，其他 NAS 的容器管理界面操作类似。
 
-1. 到仓库的 [Releases](../../releases) 页面下载镜像包，文件名形如 `xsx-live-receiver-v1.0.0.tar.gz`，解压得到 `.tar`。
-2. 导入镜像。Container Station 这类 NAS 界面在「映像」页导入；命令行是 `docker load -i xsx-live-receiver-v1.0.0.tar`。导入后镜像名是 `xsx-live/receiver:latest`，正好是 `docker-compose.yml` 里默认用的名字。
-3. 下载仓库里的 [`docker-compose.yml`](docker-compose.yml)。NAS 界面里用不到本机编译，把 `build:` 开头的三行删掉再往下做。
+1. **导入镜像**。在 [Releases](../../releases) 下载镜像包 `xsx-live-receiver-v1.0.0.tar.gz`，解压得到 `.tar` 文件；在 Container Station 的「映像」页点「导入」并选中它。导入后，映像列表中会出现 `xsx-live/receiver:latest`。
+2. **修改两处地址**。下载 [`docker-compose.nas.yml`](docker-compose.nas.yml)，这是为 NAS 准备好的 compose 文件，需要修改的两处均已用 `TODO` 标出：
+   * `XBOX_IP`：Xbox 主机的局域网 IP。
+   * `MEDIA_HTTP_BASE`：这台 NAS 的局域网 IP 加 HTTP 端口，例如 `http://192.168.1.10:8888`。
 
-#### 方式 B：从镜像仓库拉取
+   NAS 的共享文件夹不在 `/share/ContainerStation/` 下时，再把文件中两处 `xsx-files` 的路径改为实际位置。
+3. **创建应用**。在 Container Station 的「应用程序」页点「创建」，贴入修改后的文件内容，创建并启动。
+4. **登录并开始**。浏览器打开 `http://<NAS 的 IP>:8099/`，在「Xbox 账号」中登录（见下文「登录 Xbox 账号」），然后点「开启串流」。
 
-1. 下载仓库里的 [`docker-compose.yml`](docker-compose.yml)，同样删掉 `build:` 开头的三行。
-2. 把镜像指向 GitHub 的镜像仓库：命令行下在 `.env`（由 [`.env.example`](.env.example) 复制而来）里设 `XSX_IMAGE=ghcr.io/<账号>/xsx-live-receiver:<版本>`；NAS 界面下直接把 `docker-compose.yml` 里 `image:` 那一行的默认值改成这个地址。
-3. 拉取：`docker compose pull`（NAS 界面里在创建应用时自动拉取）。
+### 方式 B：从镜像仓库拉取
 
-`ghcr.io` 是 GitHub 自己的镜像仓库，每次发布新版本都会自动发布到这里。镜像包默认是私有的，仓库所有者要先在 GitHub 的 Packages 页面把它改成公开（改过之后不能再改回私有），别人才能拉取。
+适用于能访问 `ghcr.io`（GitHub 运营的镜像仓库）的机器，每个版本发布后都会自动发布到这里。
 
-#### 方式 C：本机编译
+1. 指定镜像来源：NAS 上使用 [`docker-compose.nas.yml`](docker-compose.nas.yml)，把 `image:` 改为 `ghcr.io/<账号>/xsx-live-receiver:<版本>`；命令行下使用 [`docker-compose.yml`](docker-compose.yml)，在 `.env`（由 [`.env.example`](.env.example) 复制）中设置 `XSX_IMAGE=ghcr.io/<账号>/xsx-live-receiver:<版本>`。
+2. 拉取镜像：`docker compose pull`。NAS 界面在创建应用时自动拉取。
+3. 之后与方式 A 从第 2 步起相同。
 
-适合要改代码的情况。点仓库页面上的「Code」按钮复制克隆地址，然后：
+镜像包默认是私有的，仓库所有者需先在 GitHub 的 Packages 页面将其改为公开（此后不能再改回私有），其他用户才能拉取。
+
+### 方式 C：本机编译
+
+适合需要修改代码的情况。点击仓库页面的「Code」按钮复制克隆地址：
 
 ```bash
 git clone <克隆地址>
@@ -138,37 +173,23 @@ cd xsx-live
 cp .env.example .env
 ```
 
-后面执行 `docker compose up -d` 时会自动编译接收端，第一次需要几分钟。
+执行 `docker compose up -d` 时会自动编译接收端，首次需要几分钟。配置方法见下面的「配置」。
 
-### 第 2 步：改两个地址
+### 配置
 
-[`docker-compose.yml`](docker-compose.yml) 里的设置都有默认值，通常只需要确认这两项：
+两个 compose 文件的配置项相同，默认值大多可以直接使用，通常只需确认两项：
 
-| 要改的 | 改成什么 | 为什么 |
+| 配置项 | 改成什么 | 原因 |
 | :--- | :--- | :--- |
-| `XBOX_IP` | Xbox 主机的局域网 IP | 接收端只和这个地址收发音视频，填错就连不上。建议给主机设固定 IP |
-| `MEDIA_HTTP_BASE` | `http://<YOUR_HOST_IP>:8888` | 管理页上的播放地址和拉流地址靠它拼出来。不改的话是 `127.0.0.1`，别的设备打开管理页时这些地址是错的 |
+| `XBOX_IP` | Xbox 主机的局域网 IP | 接收端只和这个地址收发音视频，填错无法连接。建议给主机设置固定 IP |
+| `MEDIA_HTTP_BASE` | `http://<YOUR_HOST_IP>:8888` | 管理页上的播放地址和拉流地址由它生成。保持 `127.0.0.1` 时，其他设备打开管理页得到的地址是错误的 |
 
-怎么改，看你是怎么装的：
-
-* **命令行**：在 `.env` 里改这两个值，`docker-compose.yml` 不用动。
-* **NAS 界面**：直接改 `docker-compose.yml`。把 `XBOX_IP` 那一行的 `192.168.1.180` 换成主机的 IP，把 `MEDIA_HTTP_BASE` 那一行的 `127.0.0.1` 换成这台机器的 IP。
-
-要换端口、换时区，或者调整其他行为，见下文「环境变量说明」。
-
-### 第 3 步：启动
-
-* **NAS 界面**（Container Station）：新建应用程序，把 `docker-compose.yml` 的内容贴进去。贴之前把两处 `./xsx-files` 换成一个绝对路径（例如 `/share/ContainerStation/xsx-live/xsx-files`），数据就不会跟着 compose 文件的位置走。然后创建并启动。
-* **命令行**：在 `docker-compose.yml` 和 `.env` 所在的目录执行 `docker compose up -d`。
-
-### 第 4 步：登录并开始串流
-
-浏览器打开 `http://<YOUR_HOST_IP>:8099/`，在「Xbox 账号」里登录（步骤见下文「登录 Xbox 账号」），然后点「开启串流」。
+修改位置取决于安装方式：NAS 界面下直接修改 compose 文件中对应的值；命令行下修改 `.env`，`docker-compose.yml` 无需改动。更换端口、时区或调整其他行为，见下文「环境变量说明」。
 
 ### 启动之后
 
-* 不需要提前准备任何文件：数据目录 `xsx-files/` 会在第一次启动时自动生成，里面有什么见下文「数据目录」。
-* 管理页和播放页都打包在镜像里，不用另外放文件。
+* 无需提前准备任何文件：数据目录 `xsx-files/` 在首次启动时自动生成，内容见下文「数据目录」。
+* 管理页和播放页均打包在镜像内。
 * 查看运行状态：
 
 ```bash
@@ -176,8 +197,8 @@ docker compose ps
 docker compose logs -f receiver
 ```
 
-* 日志同时写在 `xsx-files/state/receiver.log`，每一行带本地时间。
-* 以后换新版本的做法见下文「更新版本」。
+* 日志同时写入 `xsx-files/state/receiver.log`，每行带本地时间。
+* 升级到新版本的方法见下文「更新版本」。
 
 ---
 
@@ -199,7 +220,7 @@ Xbox 远程串流需要微软账号授权。打开管理页，在「Xbox 账号�
 
 ## 🏗 自动构建
 
-仓库带一个 GitHub Actions 工作流（`.github/workflows/build.yml`）：推送 `v` 开头的标签，或者在 Actions 页面手动运行并填版本号，就会在 GitHub 上跑测试、编译镜像并发布：
+仓库带一个 GitHub Actions 工作流（`.github/workflows/build.yml`）：推送 `v` 开头的标签，或在 Actions 页面手动运行并填入版本号，GitHub 会在其服务器上运行测试、编译镜像并发布：
 
 * 镜像：`ghcr.io/<账号>/xsx-live-receiver:<版本>` 和 `:latest`
 * 压缩的镜像包 `xsx-live-receiver-<版本>.tar.gz`（打标签时挂在 Release 上，手动运行时是构建产物），导入前要先解压
@@ -361,7 +382,8 @@ xsx-files/
 │   └── src/               源码，各模块的职责见上文「架构设计」
 ├── dashboard/             管理页的静态文件：index.html、app.js、i18n.js、style.css
 ├── www/                   播放页：index.html 和它用的 mpegts.js
-├── docker-compose.yml     示例配置，每一项都有注释
+├── docker-compose.yml     通用的示例配置，每一项都有注释
+├── docker-compose.nas.yml 给 NAS 准备的配置，只需修改两处地址
 ├── .env.example           环境变量示例
 ├── srs.conf               分发服务的参考配置，和 compose 里的 SRS_* 变量等价
 └── .github/workflows/     GitHub Actions：测试、编译镜像、发布

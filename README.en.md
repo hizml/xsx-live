@@ -10,25 +10,53 @@
 > **Very low overhead, zero video transcoding, native 2K 60fps.** An Xbox LAN WebRTC receiver and streaming hub.
 > Built for OBS, the Douyin Live Companion and LAN stream distribution.
 
+**About**: receives the picture and sound of an Xbox Series X|S on a NAS or PC in the LAN and turns them into a live stream. Streaming software such as OBS or the Douyin Live Companion can take that stream, and browsers can watch it directly. Audio and video only travel on the LAN, so playing on the console with a controller is unaffected.
+
 ---
 
 ## 🌟 Highlights
 
-* **🚀 Video is not transcoded (stream copy)**: H.264 video frames are taken from the Xbox WebRTC media stream and remuxed as is, **without decoding or re-encoding, so no quality loss**. No GPU is needed. Only the audio is converted from Opus to AAC.
-* **⚡ Very lightweight**: the receiver is written in Rust (on the `str0m` WebRTC stack) and the media server is SRS 5. About 10 MB of memory at idle. While streaming, the load depends on the machine. The figures given by the original project are about 40 MB of memory and 15% of one CPU core.
-* **🎛️ Web dashboard**: start and stop streaming, reconnect, watch live frame rate and bitrate, and open a muted preview (port `8099` by default).
-* **🎬 Several playback protocols**: HTTP-FLV, RTMP, and a low-latency browser player page with a bundled `mpegts.js`.
-* **🔒 LAN-only media**: sign-in, session setup and small heartbeats go over the Internet. Audio and video travel directly between the console and the receiver on the LAN, with no public relay.
-* **🎮 Leaves the controller alone**: the receiver sends no gamepad data in normal operation, so playing with a physical controller on the console is unaffected. It only acts right after connecting ("says hello", so the session is not ended for having no client) and when nobody has touched the controller for a long time and the console is about to end the session.
+* **🚀 Zero video transcoding (stream copy)**: the H.264 video frames from the Xbox are remuxed as is, without decoding or re-encoding. **No quality loss and no GPU needed.** Only the audio is converted from Opus to AAC.
+* **⚡ Lightweight**: the receiver is written in Rust (on the `str0m` WebRTC stack) and the media server is SRS 5. About 10 MB of memory at idle. While streaming, the load depends on the machine. The reference figures given by the original project are about 40 MB of memory and 15% of one CPU core.
+* **🎛️ Web dashboard**: start and stop streaming, reconnect, live frame rate and bitrate, muted preview. Default address `http://<YOUR_HOST_IP>:8099/`.
+* **🎬 Several ways to pull the stream**: HTTP-FLV, RTMP, and a browser player page with a bundled `mpegts.js`.
+* **🔒 Audio and video stay on the LAN**: only sign-in, session setup and heartbeats use the Internet. Audio and video travel directly between the console and the receiver, with no public relay.
+* **🎮 Leaves the controller alone**: the receiver sends no gamepad data in normal operation, so the physical controller is unaffected. It only registers a virtual gamepad once when connecting, and nudges the stick when there has been no input for a long time and the console is about to end the session.
 * **🔐 Sign in from the dashboard**: no scripts and no hand-edited credential files.
-* **📦 Ready to run**: the data directory is created on first start. Streaming stops when the console shuts down, and you can choose whether it starts again on the next power-on.
+* **📦 Ready to run**: the data directory is created automatically. Streaming stops when the console shuts down, and you choose whether it starts again on the next power-on.
 * **🌐 Chinese and English UI**: the dashboard and the player page are available in both languages, and the dashboard can switch at any time.
+
+---
+
+## 📖 Terms
+
+The following terms are used throughout this document:
+
+| Term | Meaning |
+| :--- | :--- |
+| Image | A read-only package holding a program together with its runtime. Import it and it runs. The receiver image is `xsx-live/receiver` |
+| Container | A running instance of an image. This service has two containers: the receiver `xsx-receiver` and the media server `xsx-media` |
+| Compose file | A YAML file describing which containers to start and how each is configured: the general `docker-compose.yml`, or `docker-compose.nas.yml` for NAS |
+| Receiver | The program that connects to the Xbox, receives audio and video and publishes it to the media server. It also serves the dashboard |
+| Media server | The service that takes the published stream and offers it to streaming software and the player page. It uses SRS |
+| Dashboard | The web page for starting and stopping streaming, signing in and checking the status. Default address `http://<YOUR_HOST_IP>:8099/` |
+| Player page | The web page for watching the picture in a browser. Default address `http://<YOUR_HOST_IP>:8888/xsx/index.html` |
+| Publish / pull | Publishing is sending out an audio and video stream. Pulling is receiving it. The receiver publishes. Streaming software and the player page pull |
+| RTMP / HTTP-FLV | Two streaming transport protocols. Streaming software usually supports at least one of them |
+| Transcoding / remuxing | Transcoding encodes the picture again. It costs CPU and can lose quality. Remuxing only changes the container format and does not encode again |
+| Environment variable | A setting passed to a program. They are listed under `environment:` in the compose file, and every one has a comment there |
+| Data directory | The directory holding the credentials, the running state and the player page, created automatically. `xsx-files/` next to the compose file with the general one, and fixed to `/share/ContainerStation/xsx-live/xsx-files` with the NAS one |
+| Credentials | The long-lived token saved after signing in. Stored in `xsx-files/auth/session.json` and renewed by the receiver |
+| Registry | The service where images are stored. `ghcr.io` is run by GitHub, Docker Hub by Docker |
+| Release | The release page on GitHub. One per version, with the importable image archive attached |
+
+`<YOUR_HOST_IP>` in the addresses means the LAN IP of the machine running this service.
 
 ---
 
 ## 📐 Architecture
 
-The service is two containers orchestrated by one `docker-compose.yml`:
+The service is two containers orchestrated by one compose file:
 
 | Container | Contents | Role |
 | :--- | :--- | :--- |
@@ -81,7 +109,7 @@ sequenceDiagram
 
 The key points:
 
-* **Little goes over the Internet**: only sign-in, session setup and small heartbeats while streaming (keeping the session alive, checking the console's power state). The dashboard signs in to the Microsoft account with an authorization code and PKCE. The long-lived credentials are stored in `xsx-files/auth/session.json` and renewed by the receiver. Sessions are set up through the Xbox remote play API (xHome): the receiver creates the session through it and exchanges the WebRTC connection parameters (ICE, SDP) with the console. Once the connection is up, picture and sound travel directly between the console and the receiver on the LAN, with no public relay. That keeps latency low and uses no Internet bandwidth.
+* **Little goes over the Internet**: only sign-in, session setup and small heartbeats while streaming (keeping the session alive, checking the console's power state). The dashboard signs in to the Microsoft account with OAuth authorization code and PKCE, with the password entered only on Microsoft's page. The long-lived credentials are stored in `xsx-files/auth/session.json` and renewed by the receiver. Sessions are set up through the Xbox remote play API (xHome): the receiver creates the session through it and exchanges the WebRTC connection parameters (ICE and SDP, the addresses and parameters needed to connect directly) with the console. Once the connection is up, picture and sound travel directly between the console and the receiver on the LAN, with no public relay. That keeps latency low and uses no Internet bandwidth.
 * **Video is not transcoded**: the receiver wraps the incoming H.264 frames into Matroska and hands them to ffmpeg, which writes them into RTMP with `-c:v copy`, without decoding or re-encoding, so no graphics card is needed. Only the audio is converted from Opus to AAC, because streaming software generally accepts AAC only.
 * **The controller is left alone**: the receiver sends no gamepad data. It only acts in two situations: it "says hello" right after connecting, so the session is not ended for having no client, and it nudges the left stick when nobody has touched the controller for about 10 minutes and the console is about to end the session. Details below under "Controller and keep-alive".
 * **Streaming stops by itself when the console shuts down**: the console tells the receiver, the receiver ends the session and waits for the console to power off, without reconnecting to it. Whether streaming starts again on the next power-on is decided by the "Start streaming when the console turns on" switch in the dashboard.
@@ -104,33 +132,40 @@ The receiver is split into modules by responsibility (`receiver/src/`):
 
 ## 🚀 Quick start
 
-Make sure of three things first:
+Before you start:
 
-* You have an Xbox Series X|S on the **same LAN** as the machine running this service. The console has to be turned on by itself. The receiver never wakes it.
-* You have a Microsoft account, the one that is signed in on the console.
-* Docker and Docker Compose are installed on the machine, and it can reach Microsoft's sign-in and services (it needs Internet access).
+* An Xbox Series X|S on the **same LAN** as the machine running this service, and turned on (the receiver never wakes the console).
+* A Microsoft account, the one that is signed in on the console.
+* Docker and Docker Compose installed on the machine (Container Station already includes them), with access to Microsoft's sign-in and services.
 
-There are three ways to install. They only differ in where the receiver image comes from. **On a NAS, or if you do not want to compile anything, pick option A.** From step 2 on, all three are identical.
+There are three ways to install. They only differ in where the receiver image comes from. **On a NAS, use option A**: only two settings need changing.
 
-### Step 1: get the receiver image
+### Option A: install on a NAS (recommended)
 
-#### Option A: import a ready-made image archive (recommended for NAS)
+Shown with QNAP Container Station. Container managers on other NAS work similarly.
 
-1. Download the archive from the [Releases](../../releases) page of the repository. The file is named like `xsx-live-receiver-v1.0.0.tar.gz`. Decompress it to get the `.tar`.
-2. Import the image. In a NAS UI such as Container Station, use the import function on the "Images" page. On the command line it is `docker load -i xsx-live-receiver-v1.0.0.tar`. The image is named `xsx-live/receiver:latest`, which is exactly the name `docker-compose.yml` uses by default.
-3. Download [`docker-compose.yml`](docker-compose.yml) from the repository. Building locally is not used in a NAS UI, so delete the three lines that start with `build:` before going on.
+1. **Import the image**. Download the archive `xsx-live-receiver-v1.0.0.tar.gz` from [Releases](../../releases) and decompress it to get the `.tar` file. In Container Station, open "Images" and click "Import", then pick that file. Afterwards `xsx-live/receiver:latest` appears in the image list.
+2. **Change two addresses**. Download [`docker-compose.nas.yml`](docker-compose.nas.yml), the compose file prepared for NAS. The two places to change are both marked `TODO`:
+   * `XBOX_IP`: the LAN IP of the Xbox console.
+   * `MEDIA_HTTP_BASE`: the LAN IP of this NAS followed by the HTTP port, for example `http://192.168.1.10:8888`.
 
-#### Option B: pull from a registry
+   If the shared folder of the NAS is not under `/share/ContainerStation/`, also change the two `xsx-files` paths in the file to the actual location.
+3. **Create the application**. In Container Station, open "Applications", click "Create", paste the edited file, then create and start it.
+4. **Sign in and start**. Open `http://<IP of the NAS>:8099/` in a browser, sign in under "Xbox account" (see "Sign in to the Xbox account" below), then click **Start streaming**.
 
-1. Download [`docker-compose.yml`](docker-compose.yml) from the repository and delete the three lines that start with `build:`.
-2. Point the image at GitHub's registry. On the command line, set `XSX_IMAGE=ghcr.io/<account>/xsx-live-receiver:<version>` in `.env` (copied from [`.env.example`](.env.example)). In a NAS UI, change the default value on the `image:` line of `docker-compose.yml` to that address.
-3. Pull it with `docker compose pull`. In a NAS UI the pull happens when the application is created.
+### Option B: pull from a registry
 
-`ghcr.io` is GitHub's own image registry. Every new release is published there automatically. Image packages are private by default. The repository owner has to make the package public on the GitHub Packages page first (once public, it cannot be made private again) before others can pull it.
+For machines that can reach `ghcr.io`, the registry run by GitHub. Every version is published there automatically.
 
-#### Option C: build locally
+1. Choose the image source: on a NAS, use [`docker-compose.nas.yml`](docker-compose.nas.yml) and change `image:` to `ghcr.io/<account>/xsx-live-receiver:<version>`. On the command line, use [`docker-compose.yml`](docker-compose.yml) and set `XSX_IMAGE=ghcr.io/<account>/xsx-live-receiver:<version>` in `.env` (copied from [`.env.example`](.env.example)).
+2. Pull the image: `docker compose pull`. In a NAS UI the pull happens when the application is created.
+3. From here on it is the same as option A from step 2.
 
-For when you want to change the code. Click "Code" on the repository page to copy the clone URL, then:
+Image packages are private by default. The repository owner has to make the package public on the GitHub Packages page first (once public, it cannot be made private again) before others can pull it.
+
+### Option C: build locally
+
+For when you need to change the code. Click "Code" on the repository page to copy the clone URL:
 
 ```bash
 git clone <clone URL>
@@ -138,37 +173,23 @@ cd xsx-live
 cp .env.example .env
 ```
 
-When you run `docker compose up -d` later, the receiver is compiled automatically. The first time takes a few minutes.
+When you run `docker compose up -d`, the receiver is compiled automatically. The first time takes a few minutes. See "Configuration" below for the settings.
 
-### Step 2: change two addresses
+### Configuration
 
-All settings in [`docker-compose.yml`](docker-compose.yml) have defaults. Usually you only need to check these two:
+Both compose files have the same settings. Most defaults can be used as they are. Usually only two need checking:
 
 | Setting | Change it to | Why |
 | :--- | :--- | :--- |
 | `XBOX_IP` | LAN IP of the Xbox console | The receiver exchanges audio and video with this address only, so streaming cannot work if it is wrong. Give the console a static IP. |
-| `MEDIA_HTTP_BASE` | `http://<YOUR_HOST_IP>:8888` | The dashboard builds the player and stream addresses from it. If it stays `127.0.0.1`, those addresses are wrong for other devices that open the dashboard. |
+| `MEDIA_HTTP_BASE` | `http://<YOUR_HOST_IP>:8888` | The dashboard generates the player and stream addresses from it. If it stays `127.0.0.1`, other devices get wrong addresses when they open the dashboard. |
 
-How to change them depends on how you install:
-
-* **Command line**: change the two values in `.env`. `docker-compose.yml` can stay as it is.
-* **NAS UI**: edit `docker-compose.yml` directly. Replace `192.168.1.180` on the `XBOX_IP` line with the console's IP, and replace `127.0.0.1` on the `MEDIA_HTTP_BASE` line with this machine's IP.
-
-To change ports or the time zone, or to adjust other behavior, see "Environment variables" below.
-
-### Step 3: start
-
-* **NAS UI** (Container Station): create a new application and paste the contents of `docker-compose.yml`. Before pasting, replace both occurrences of `./xsx-files` with an absolute path (for example `/share/ContainerStation/xsx-live/xsx-files`), so the data does not depend on where the compose file lives. Then create and start it.
-* **Command line**: run `docker compose up -d` in the directory holding `docker-compose.yml` and `.env`.
-
-### Step 4: sign in and start streaming
-
-Open `http://<YOUR_HOST_IP>:8099/` in a browser, sign in under "Xbox account" (see "Sign in to the Xbox account" below), then click **Start streaming**.
+Where to change them depends on how you installed: in a NAS UI, change the values in the compose file directly. On the command line, change `.env`. `docker-compose.yml` needs no change. To change ports or the time zone, or to adjust other behavior, see "Environment variables" below.
 
 ### After it starts
 
 * No files need to be prepared beforehand: the data directory `xsx-files/` is created on first start. See "Data directory" below for what is inside.
-* The dashboard and the player page are inside the image. No extra files are needed.
+* The dashboard and the player page are inside the image.
 * Check the running state:
 
 ```bash
@@ -177,7 +198,7 @@ docker compose logs -f receiver
 ```
 
 * The log is also written to `xsx-files/state/receiver.log`, one line per entry with local time.
-* For moving to a new version later, see "Updating" below.
+* For moving to a new version, see "Updating" below.
 
 ---
 
@@ -199,7 +220,7 @@ A few notes:
 
 ## 🏗 Automatic builds
 
-The repository has a GitHub Actions workflow (`.github/workflows/build.yml`). Push a tag starting with `v`, or run the workflow manually from the Actions page with a version number, and GitHub runs the tests, builds the image and publishes it:
+The repository has a GitHub Actions workflow (`.github/workflows/build.yml`). Push a tag starting with `v`, or run the workflow manually from the Actions page with a version number, and GitHub runs the tests, builds the image and publishes it on its own servers:
 
 * Image: `ghcr.io/<account>/xsx-live-receiver:<version>` and `:latest`
 * A compressed image archive `xsx-live-receiver-<version>.tar.gz` (attached to the Release for a tag, a build artifact for a manual run). Decompress it before importing.
@@ -361,7 +382,8 @@ To go back to an old version, import that version's image archive and recreate a
 │   └── src/               Source code. Each module's job is described under "Architecture"
 ├── dashboard/             Static files of the dashboard: index.html, app.js, i18n.js, style.css
 ├── www/                   Player page: index.html and the mpegts.js it uses
-├── docker-compose.yml     Example configuration, with a comment on every setting
+├── docker-compose.yml     General example configuration, with a comment on every setting
+├── docker-compose.nas.yml Configuration prepared for NAS. Only two addresses need changing
 ├── .env.example           Example environment variables
 ├── srs.conf               Reference configuration of the media server, equivalent to the SRS_* variables in the compose file
 └── .github/workflows/     GitHub Actions: tests, building the image, publishing
