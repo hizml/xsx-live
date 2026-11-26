@@ -42,6 +42,10 @@ const IDLE_REPEAT:Duration=Duration::from_secs(30);
 // 警告之后这么长时间之内允许重复推。窗口收得和重复间隔一样长，等于每轮警告只推一次
 // （用户定的：提示弹多了烦）。主机给的倒计时是 120 秒，实测推一次就够挡住
 const IDLE_WINDOW:Duration=Duration::from_secs(30);
+// 挂机保活把虚拟手柄保持注册（整个挂机段只注册一次，不反复进出主机的设备列表）。
+// 距上次微脉冲超过这么久还没来新的一轮警告，多半是有人回来玩了（本地输入同样会顶掉警告），
+// 这时释放虚拟手柄。新警告的实际间隔约 10 分钟，这里留 3 分钟余量
+const IDLE_ROUND_GAP:Duration=Duration::from_secs(780);
 const RECENTER_DELAY:Duration=Duration::from_millis(40);
 // 串流进行时定期向微软查主机的电源状态。连续两次不是「开着」就结束会话
 const POWER_POLL_SECS:u64=30;
@@ -53,7 +57,7 @@ const INBOUND_LOG_CHARS:usize=240;
 #[derive(Clone,PartialEq,Debug)]
 enum PadStep{None,Pulse}
 #[derive(Default)]
-struct PadPulse{settle:u8,neutral:u8,pulse:bool,release:bool,warned_at:Option<tokio::time::Instant>,last:Option<tokio::time::Instant>}
+struct PadPulse{settle:u8,neutral:u8,pulse:bool,release:bool,parked:bool,warned_at:Option<tokio::time::Instant>,last:Option<tokio::time::Instant>}
 impl PadPulse{
  // 握手完成后打个招呼：发两帧中立输入再松开
  fn hello(&mut self){self.neutral=HELLO_FRAMES;self.release=true;}
@@ -65,10 +69,12 @@ impl PadPulse{
   if self.last.is_some_and(|t|t.elapsed()<IDLE_REPEAT){return;}
   self.reengage(rtc,control);
  }
- // 重新注册手柄并等一个 tick 让注册先生效，再发微脉冲；做完再松开，把玩家位还给主机
+ // 发微脉冲。手柄没在保持注册时先重新注册并等一个 tick 让注册生效；挂机保活的脉冲推完
+ // 不再释放：保持注册到挂机结束（见 IDLE_ROUND_GAP）。开场问候推完照旧立即释放
  fn reengage(&mut self,rtc:&mut Rtc,control:Option<ChannelId>){
+  if self.parked{self.pulse=true;return;}
   if !self.release{write_dc(rtc,control,&protocol::gamepad_changed());self.settle=1;}
-  self.pulse=true;self.release=true;
+  self.pulse=true;
  }
  // 距最近一次警告还在倒计时之内、且距上次微脉冲满 30 秒，就再推一次。
  // 倒计时过去仍没有新警告，说明微脉冲起作用了，到此为止
@@ -84,9 +90,12 @@ impl PadPulse{
    self.neutral-=1;log!("PAD_HELLO frames_left={}",self.neutral);
   }else if self.pulse{
    send_gamepad(rtc,input,seq,&xsx_native::rtc::input::GamepadFrame::idle_pulse(),elapsed);
-   self.pulse=false;self.last=Some(tokio::time::Instant::now());log!("PAD_IDLE_PULSE");return PadStep::Pulse;
-  }else if self.release{release_pad(rtc,control);self.release=false;log!("PAD_RELEASED");}
+   self.pulse=false;self.last=Some(tokio::time::Instant::now());
+   if !self.release{self.parked=true;}
+   log!("PAD_IDLE_PULSE");return PadStep::Pulse;
+  }else if self.release{release_pad(rtc,control);self.release=false;self.parked=false;log!("PAD_RELEASED");}
   else if self.in_warning_window(){self.reengage(rtc,control);}
+  else if self.parked&&self.last.is_some_and(|t|t.elapsed()>=IDLE_ROUND_GAP){self.release=true;}
   PadStep::None
  }
 }
@@ -501,13 +510,15 @@ mod tests {
   pad.on_idle_warning(&mut rtc,None);
   assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None,PadStep::Pulse,PadStep::None,PadStep::None]);
   assert!(!pad.release);
+  assert!(pad.parked,"挂机期间保持注册，不反复进出设备列表");
   // 过了重复间隔也不再有第二次：窗口按第一次警告算，已经结束
   tokio::time::advance(Duration::from_secs(31)).await;
   assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None;ACTION_TICKS]);
   assert_eq!(pad.warned_at,None,"窗口已结束");
-  // 之后哪怕再过很久也不动
+  // 之后哪怕再过很久也不动，手柄仍保持注册
   tokio::time::advance(Duration::from_secs(600)).await;
   assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None;ACTION_TICKS]);
+  assert!(pad.parked);
  }
  #[tokio::test(start_paused=true)]
  async fn a_new_warning_starts_a_new_round(){
@@ -515,8 +526,19 @@ mod tests {
   pad.on_idle_warning(&mut rtc,None);advance(&mut pad,ACTION_TICKS);
   tokio::time::advance(IDLE_WINDOW).await;advance(&mut pad,ACTION_TICKS);
   pad.on_idle_warning(&mut rtc,None);
-  assert_eq!(pad.settle,1,"新一轮要先重新注册手柄");
-  assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None,PadStep::Pulse,PadStep::None,PadStep::None]);
+  assert!(pad.parked,"挂机中，新一轮不用重新注册");
+  assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::Pulse,PadStep::None,PadStep::None,PadStep::None],"保持注册，直接推");
+ }
+
+ #[tokio::test(start_paused=true)]
+ async fn releases_the_parked_pad_when_rounds_stop_coming(){
+  let mut pad=PadPulse::default();let mut rtc=Rtc::new(Instant::now());
+  pad.on_idle_warning(&mut rtc,None);advance(&mut pad,ACTION_TICKS);
+  assert!(pad.parked);
+  // 超过一轮的间隔没有新警告（多半是有人回来玩了）：释放，把设备位还回去
+  tokio::time::advance(IDLE_ROUND_GAP+Duration::from_secs(1)).await;
+  assert_eq!(advance(&mut pad,2),vec![PadStep::None,PadStep::None]);
+  assert!(!pad.parked&&!pad.release,"已释放");
  }
  #[tokio::test(start_paused=true)]
  async fn warnings_in_quick_succession_pulse_only_once(){
