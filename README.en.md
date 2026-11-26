@@ -115,7 +115,7 @@ The other two ways to install only differ in where the image comes from. From st
 
 | Way | What to do |
 | :--- | :--- |
-| Pull from a registry | Set `XSX_IMAGE` to `ghcr.io/<account>/xsx-live-receiver:<version>` and run `docker compose pull`. Images are private by default. The repository owner has to make the package public first. |
+| Pull from a registry | Set `XSX_IMAGE` to `ghcr.io/<account>/xsx-live-receiver:<version>` and run `docker compose pull`. Image packages are private by default. The repository owner has to make the package public on the GitHub Packages page first (once public, it cannot be made private again). |
 | Build locally | Clone the repository and run `docker compose up -d`. The first run compiles the receiver, which takes a few minutes. |
 
 ---

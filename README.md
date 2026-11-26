@@ -115,7 +115,7 @@ sequenceDiagram
 
 | 装法 | 怎么做 |
 | :--- | :--- |
-| 从镜像仓库拉取 | 把 `XSX_IMAGE` 设为 `ghcr.io/<账号>/xsx-live-receiver:<版本>`，再执行 `docker compose pull`。镜像默认是私有的，仓库所有者要先把它改成公开 |
+| 从镜像仓库拉取 | 把 `XSX_IMAGE` 设为 `ghcr.io/<账号>/xsx-live-receiver:<版本>`，再执行 `docker compose pull`。镜像包默认是私有的，仓库所有者要先在 GitHub 的 Packages 页面改成公开（改过之后不能再改回私有） |
 | 本机编译 | 克隆仓库后直接 `docker compose up -d`，第一次会编译接收端，需要几分钟 |
 
 ---
