@@ -261,19 +261,22 @@ async fn main()->Result<()> {
  xsx_native::health::update("stopped",serde_json::json!({}))?;
  log!("STOPPED");Ok(())
 }
-// 接收端要连的主机地址。XBOX_IP 设了就以它为准，现有安装的行为不变；没设时用建会话回应里的主机地址，
-// 取不到就报一个能认出来的原因（CONSOLE_ADDRESS_UNAVAILABLE），主循环稍后重试
-fn console_address(configured:Option<&str>,cfg:&xsx_native::xhome::StreamConfig)->Result<IpAddr>{
- let from_session=cfg.console_ipv4();
+// 接收端要连的主机地址和端口。XBOX_IP 设了就以它为准（端口用固定的 9002），现有安装的行为不变；
+// 没设时用会话回应里带的主机地址和端口（主要来自 /configuration），取不到就报一个能认出来的原因
+// （CONSOLE_ADDRESS_UNAVAILABLE），主循环稍后重试
+fn console_address(configured:Option<&str>,cfg:&xsx_native::xhome::StreamConfig)->Result<SocketAddr>{
+ let from_session=cfg.console_ipv4_endpoint();
  let Some(value)=configured.map(str::trim).filter(|value|!value.is_empty())else{
-  let address=from_session.ok_or_else(||anyhow!("CONSOLE_ADDRESS_UNAVAILABLE"))?;
-  log!("CONSOLE_ADDRESS source=session ipv4={address}");return Ok(IpAddr::V4(address));
+  let (address,port)=from_session.ok_or_else(||anyhow!("CONSOLE_ADDRESS_UNAVAILABLE"))?;
+  log!("CONSOLE_ADDRESS source=session endpoint={address}:{port}");return Ok(SocketAddr::new(IpAddr::V4(address),port));
  };
  let address:IpAddr=value.parse().context("XBOX_IP 要写成一个 IP 地址")?;
  // 诊断用：显式配置时也记下会话回应里给出的地址，并和配置比一下，据此判断不配置行不行
- let is_same=match address{IpAddr::V4(v4)=>from_session==Some(v4),IpAddr::V6(v6)=>v6.to_ipv4_mapped()==from_session};
- log!("CONSOLE_ADDRESS source=config configured={address} session_ipv4={} is_same={is_same}",from_session.map(|address|address.to_string()).unwrap_or_else(||"none".into()));
- Ok(address)
+ let session_text=from_session.map(|(a,p)|format!("{a}:{p}")).unwrap_or_else(||"none".into());
+ let configured_v4=match address{IpAddr::V4(v4)=>Some(v4),IpAddr::V6(v6)=>v6.to_ipv4_mapped()};
+ let is_same=from_session.is_some_and(|(session,port)|Some(session)==configured_v4&&port==9002);
+ log!("CONSOLE_ADDRESS source=config configured={address}:9002 session={session_text} is_same={is_same}");
+ Ok(SocketAddr::new(address,9002))
 }
 async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tokio::sync::watch::Receiver<xsx_native::control::ControlState>,revision:u64)->Result<()> {
  let setup=async {
@@ -306,8 +309,8 @@ async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tok
  let (console_off,power_task)=spawn_power_probe(client.clone(),console_id);
  let address=console_address(std::env::var("XBOX_IP").ok().as_deref(),&cfg);
  let result=match address{
-  Ok(console_ip)=>tokio::select! {
-   value=receive(&client,&cfg.session_path,revision,console_off,console_ip)=>value,
+  Ok(console)=>tokio::select! {
+   value=receive(&client,&cfg.session_path,revision,console_off,console)=>value,
    _=shutdown.changed()=>{log!("STOP_REQUESTED");Ok(())},
    _=wait_for_revision_change(control.clone(),revision)=>{log!("CONTROL_SESSION_END");Ok(())}
   },
@@ -319,8 +322,9 @@ async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tok
  }
  result
 }
-async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::sync::watch::Receiver<bool>,xbox_ip:IpAddr)->Result<()>{
- let probe=StdUdpSocket::bind("0.0.0.0:0")?;probe.connect(SocketAddr::new(xbox_ip,9002))?;let local_ip=probe.local_addr()?.ip();drop(probe);
+async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::sync::watch::Receiver<bool>,console:SocketAddr)->Result<()>{
+ let xbox_ip=console.ip();let console_port=console.port();
+ let probe=StdUdpSocket::bind("0.0.0.0:0")?;probe.connect(console)?;let local_ip=probe.local_addr()?.ip();drop(probe);
  let udp=UdpSocket::bind(SocketAddr::new(local_ip,0)).await?;let local=udp.local_addr()?;
  let mut rtc=Rtc::new(Instant::now());rtc.add_local_candidate(Candidate::host(local,"udp").map_err(|e|anyhow!("{e}"))?);
  let mut control=None;let mut message=None;let mut input=None;
@@ -341,7 +345,7 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
  log!("SDP dtls={} sdes={}",answer.contains("a=fingerprint:"),answer.contains("a=crypto:"));
  let filtered=answer.lines().filter(|l|!l.starts_with("a=candidate:")).collect::<Vec<_>>().join("\r\n")+"\r\n";
  rtc.sdp_api().accept_answer(pending,SdpAnswer::from_sdp_string(&filtered).map_err(|e|anyhow!("{e}"))?).map_err(|e|anyhow!("{e}"))?;
- let direct=format!("candidate:1 1 UDP 2130706431 {} 9002 typ host",xbox_ip);
+ let direct=format!("candidate:1 1 UDP 2130706431 {} {} typ host",xbox_ip,console_port);
  rtc.add_remote_candidate(Candidate::from_sdp_string(&direct).map_err(|e|anyhow!("{e}"))?);
  for c in offer.lines().filter_map(|l|l.strip_prefix("a=")).filter(|l|l.starts_with("candidate:")){let _=client.send_ice_candidate(path,c).await;}
  log!("LAN_ONLY peer={} local={}",xbox_ip,local.ip());
@@ -406,7 +410,7 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
    _=tokio::time::sleep(deadline.saturating_duration_since(Instant::now()))=>{rtc.handle_input(Input::Timeout(Instant::now())).map_err(|e|anyhow!("{e}"))?;}
    _=tick.tick()=>{
     if let Some(out)=relay.as_mut(){out.tick()?;}
-    if !connected{if let Ok(candidates)=client.poll_ice_candidates(path).await{for c in candidates{let parts=c.candidate.split_whitespace().collect::<Vec<_>>();if parts.get(4).is_some_and(|v|*v==xbox_ip.to_string()){if let Ok(c)=Candidate::from_sdp_string(&c.candidate){rtc.add_remote_candidate(c);}}}}}
+    if !connected{if let Ok(candidates)=client.poll_ice_candidates(path).await{for c in candidates{let parts=c.candidate.split_whitespace().collect::<Vec<_>>();if parts.get(4).is_some_and(|v|*v==xbox_ip.to_string()){if let Ok(c)=Candidate::from_sdp_string(&c.candidate){rtc.add_remote_candidate(c);}}else if !seen.contains_key("ice_remote"){seen.insert("ice_remote".into(),1);let sample:String=c.candidate.chars().take(120).collect();log!("ICE_REMOTE first={sample}");}}}}
     if handshake&&recenter_at.is_none(){
      if last_keyframe.elapsed()>Duration::from_secs(2){write_dc(&mut rtc,control,&protocol::keyframe_request());last_keyframe=Instant::now();}
      if pad.tick(&mut rtc,control,input,&mut input_seq,started.elapsed())==PadStep::Pulse{recenter_at=Some(Instant::now()+RECENTER_DELAY);}
@@ -531,26 +535,26 @@ mod tests {
   assert!(should_log_inbound(INBOUND_LOG_EVERY));
  }
 
-    fn session_with_console(ipv4:Option<&str>)->xsx_native::xhome::StreamConfig{
-        let details=xsx_native::xhome::ServerDetails{ip_address:None,ipv4_address:ipv4.map(str::to_owned),ipv6_address:None,port:None,tcp_port:None,udp_port:None,sdp:None};
+    fn session_with_console(ipv4:Option<&str>,port:Option<u16>)->xsx_native::xhome::StreamConfig{
+        let details=xsx_native::xhome::ServerDetails{ip_address:None,ipv4_address:ipv4.map(str::to_owned),ipv4_port:port,ipv6_address:None,ipv6_port:None,port:None,tcp_port:None,udp_port:None,sdp:None};
         xsx_native::xhome::StreamConfig{session_id:String::new(),session_path:String::new(),exchange_response:String::new(),gs_token:String::new(),keep_alive_pulse_seconds:None,server_details:Some(details)}
     }
-    // XBOX_IP 设了就以它为准，不受会话回应影响：现有安装的行为不变
+    // XBOX_IP 设了就以它为准（端口固定 9002），不受会话回应影响：现有安装的行为不变
     #[test]
     fn configured_console_address_wins(){
-        let session=session_with_console(Some("192.168.1.10"));
-        let expected:IpAddr="192.168.1.180".parse().unwrap();
+        let session=session_with_console(Some("192.168.1.10"),Some(9004));
+        let expected:SocketAddr="192.168.1.180:9002".parse().unwrap();
         assert_eq!(console_address(Some("192.168.1.180"),&session).unwrap(),expected);
         assert!(console_address(Some("not-an-ip"),&session).unwrap_err().to_string().contains("XBOX_IP"));
-        assert_eq!(console_address(Some("  "),&session).unwrap(),"192.168.1.10".parse::<IpAddr>().unwrap(),"只有空白等同于没设");
+        assert_eq!(console_address(Some("  "),&session).unwrap(),"192.168.1.10:9004".parse().unwrap(),"只有空白等同于没设");
     }
-    // 没设 XBOX_IP 时用会话回应里的主机地址；回应里没有可用的私有地址就报一个能认出来的原因
+    // 没设 XBOX_IP 时用会话回应里的主机地址和端口；端口依次取 ipV4Port/udpPort/port，都没有用 9002
     #[test]
     fn console_address_falls_back_to_the_session_response(){
-        let expected:IpAddr="192.168.1.10".parse().unwrap();
-        assert_eq!(console_address(None,&session_with_console(Some("192.168.1.10"))).unwrap(),expected);
+        assert_eq!(console_address(None,&session_with_console(Some("192.168.1.10"),Some(9004))).unwrap(),"192.168.1.10:9004".parse().unwrap());
+        assert_eq!(console_address(None,&session_with_console(Some("192.168.1.10"),None)).unwrap(),"192.168.1.10:9002".parse().unwrap(),"没有端口时用 9002");
         for unusable in [Some("203.0.113.5"),Some("192.0.2.1"),Some("not-an-ip"),None]{
-            let error=console_address(None,&session_with_console(unusable)).unwrap_err().to_string();
+            let error=console_address(None,&session_with_console(unusable,Some(9002))).unwrap_err().to_string();
             assert!(error.contains("CONSOLE_ADDRESS_UNAVAILABLE"),"{unusable:?} 不该被当成主机地址：{error}");
         }
     }

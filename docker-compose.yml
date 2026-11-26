@@ -108,7 +108,8 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
     environment:
-      # Xbox 主机的局域网 IP。接收端只和这个地址收发音视频，必须填对（自动获取实测拿不到地址）
+      # Xbox 主机的局域网 IP，填写时必须填对。1.1.0 起可不填（试验性）：不填时自动从会话配置取
+      # 主机的地址和端口，取不到以 CONSOLE_ADDRESS_UNAVAILABLE 重试，届时填上即可
       # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好。
       # 微软账号的凭据文件：在管理页里登录后生成，之后由接收端自动续期
       XBOX_AUTH_FILE: /files/auth/session.json

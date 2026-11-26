@@ -65,14 +65,27 @@ pub struct StreamConfig {
 }
 
 impl StreamConfig {
-    /// 主机在局域网里的 IPv4 地址，取自建会话时的回应。只认私有地址（10.x、172.16 到 172.31、192.168.x）：
-    /// 这套服务只在局域网里工作，回应里出现别的地址也不该去连
-    pub fn console_ipv4(&self) -> Option<Ipv4Addr> {
+    /// 主机在局域网里的 IPv4 地址和端口，取自会话相关回应（主要是 /configuration，Better xCloud 也是从这里取的）。
+    /// 只认私有地址（10.x、172.16 到 172.31、192.168.x）：这套服务只在局域网里工作，别的地址不该去连。
+    /// 端口依次取 ipV4Port、udpPort、port，都没有时用 9002（主机串流的固定端口）
+    pub fn console_ipv4_endpoint(&self) -> Option<(Ipv4Addr, u16)> {
         let details = self.server_details.as_ref()?;
-        [&details.ipv4_address, &details.ip_address].into_iter().flatten()
+        let address = [&details.ipv4_address, &details.ip_address].into_iter().flatten()
             .filter_map(|address| address.trim().parse::<Ipv4Addr>().ok())
-            .find(|address| address.is_private())
+            .find(|address| address.is_private())?;
+        let port = details.ipv4_port.or(details.udp_port).or(details.port).unwrap_or(9002);
+        Some((address, port))
     }
+}
+
+// 几个来源都可能有 serverDetails（建会话回应、/state、/configuration），优先留带着可用主机地址的那份
+fn merge_details(primary: Option<ServerDetails>, fallback: Option<ServerDetails>) -> Option<ServerDetails> {
+    let has_address = |details: &Option<ServerDetails>| details.as_ref().is_some_and(|d|
+        [&d.ipv4_address, &d.ip_address].into_iter().flatten()
+            .filter_map(|a| a.trim().parse::<Ipv4Addr>().ok()).any(|a| a.is_private()));
+    if has_address(&primary) { primary }
+    else if has_address(&fallback) { fallback }
+    else { primary.or(fallback) }
 }
 
 /// xHome streaming API client
@@ -199,8 +212,12 @@ pub struct ServerDetails {
     /// 主机的局域网 IPv4 地址
     #[serde(rename = "ipV4Address")]
     pub ipv4_address: Option<String>,
+    #[serde(rename = "ipV4Port")]
+    pub ipv4_port: Option<u16>,
     #[serde(rename = "ipV6Address")]
     pub ipv6_address: Option<String>,
+    #[serde(rename = "ipV6Port")]
+    pub ipv6_port: Option<u16>,
     pub port: Option<u16>,
     #[serde(rename = "tcpPort")]
     pub tcp_port: Option<u16>,
@@ -464,20 +481,20 @@ impl XHomeClient {
             } else if let Some(exchange) = session_response.exchange_response {
                 // The exchange response might be the SDP directly or might need extraction
                 let sdp = self.extract_sdp_from_response(&exchange).ok();
-                // Still fetch config to get keepalive interval
-                let keepalive = match self.get_session_configuration(&session_path).await {
+                // 顺带取心跳间隔和主机地址（/configuration 的回应里带着 serverDetails）
+                let (keepalive, config_details) = match self.get_session_configuration(&session_path).await {
                     Ok(config) => {
                         if let Some(secs) = config.keep_alive_pulse_in_seconds {
                             info!("Xbox keepAlivePulseInSeconds: {}s", secs);
                         }
-                        config.keep_alive_pulse_in_seconds
+                        (config.keep_alive_pulse_in_seconds, config.server_details)
                     }
                     Err(e) => {
                         warn!("Failed to get session configuration: {}", e);
-                        None
+                        (None, None)
                     }
                 };
-                (sdp, session_response.server_details, keepalive)
+                (sdp, merge_details(config_details, session_response.server_details), keepalive)
             } else {
                 // Try to get session state/configuration
                 self.wait_for_session_ready(&session_path).await?
@@ -593,18 +610,18 @@ impl XHomeClient {
                 "Provisioned" | "ReadyToConnect" => {
                     info!("Session is ready!");
 
-                    // Always fetch session configuration for keepalive interval
-                    let keepalive_seconds = match self.get_session_configuration(session_path).await
+                    // Always fetch session configuration for keepalive interval and console address
+                    let (keepalive_seconds, config_details) = match self.get_session_configuration(session_path).await
                     {
                         Ok(config) => {
                             if let Some(secs) = config.keep_alive_pulse_in_seconds {
                                 info!("Xbox keepAlivePulseInSeconds: {}s", secs);
                             }
-                            config.keep_alive_pulse_in_seconds
+                            (config.keep_alive_pulse_in_seconds, config.server_details)
                         }
                         Err(e) => {
                             warn!("Failed to get session configuration: {}", e);
-                            None
+                            (None, None)
                         }
                     };
 
@@ -614,7 +631,7 @@ impl XHomeClient {
                             info!("Got SDP from state response");
                             return Ok((
                                 Some(sdp),
-                                state_response.server_details,
+                                merge_details(config_details.clone(), state_response.server_details.clone()),
                                 keepalive_seconds,
                             ));
                         }
@@ -624,7 +641,7 @@ impl XHomeClient {
                                 info!("Got SDP from exchangeResponse in state");
                                 return Ok((
                                     Some(extracted),
-                                    state_response.server_details,
+                                    merge_details(config_details.clone(), state_response.server_details.clone()),
                                     keepalive_seconds,
                                 ));
                             }
@@ -634,13 +651,13 @@ impl XHomeClient {
                                 info!("Got SDP from serverDetails");
                                 return Ok((
                                     Some(sdp.clone()),
-                                    state_response.server_details,
+                                    merge_details(config_details.clone(), state_response.server_details.clone()),
                                     keepalive_seconds,
                                 ));
                             }
 
                     // Return what we have from state
-                    return Ok((None, state_response.server_details, keepalive_seconds));
+                    return Ok((None, merge_details(config_details, state_response.server_details), keepalive_seconds));
                 }
                 "Provisioning" | "WaitingForResources" => {
                     debug!("Session still provisioning...");
