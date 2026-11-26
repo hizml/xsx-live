@@ -10,7 +10,12 @@
 #
 # 数据目录 ./xsx-files 会自动生成，里面是凭据（auth）、运行状态（state）和播放页（www），
 # 不需要提前放任何文件。凭据在管理页里登录一次就有（见 README）。
+#
+# 装之前通常要改的只有两处。命令行下在 .env 里改，NAS 界面里直接改下面写着的默认值：
+#   XBOX_IP          Xbox 主机的局域网 IP
+#   MEDIA_HTTP_BASE  这台机器的局域网 IP 加 HTTP 端口（8888）
 services:
+  # 分发服务：接收端把流推给它，直播软件和播放页从它拉流
   media:
     image: ossrs/srs:5
     container_name: xsx-media
@@ -18,38 +23,63 @@ services:
     # 分发服务的配置写在下面的环境变量里。-e 表示只用环境变量，不需要配置文件
     command: ["./objs/srs", "-e"]
     environment:
+      # SRS_ 开头的变量对应分发服务（SRS）配置文件里的设置，规则是 SRS_配置段_配置项。
+      # 这些值都是为低延迟调过的，一般不用改
+      # RTMP 端口（容器内）。接收端往这里推流，直播软件从这里拉 RTMP
       SRS_LISTEN: "1935"
+      # 以前台进程运行，日志直接输出。容器里必须关掉守护进程模式
       SRS_DAEMON: "off"
+      # 日志写到控制台（不是文件），用 docker logs 看
       SRS_SRS_LOG_TANK: console
+      # 日志级别：只记录警告和错误
       SRS_SRS_LOG_LEVEL: warn
+      # 最多同时接受多少个连接（推流、拉流、接口都算）
       SRS_MAX_CONNECTIONS: "100"
+      # HTTP 管理接口：接收端通过它查询「现在有没有在出流」，管理页据此显示状态
       SRS_HTTP_API_ENABLED: "on"
       SRS_HTTP_API_LISTEN: "1985"
+      # 允许跨域访问这个接口。它只在宿主机本机的 1985 端口开放（见下面的 ports）
       SRS_HTTP_API_CROSSDOMAIN: "on"
+      # HTTP 服务：对外提供 HTTP-FLV 和播放页的静态文件
       SRS_HTTP_SERVER_ENABLED: "on"
+      # 容器内的 HTTP 端口，下面 ports 里把它映射到宿主机的 8888
       SRS_HTTP_SERVER_LISTEN: "8080"
+      # 静态文件根目录。播放页挂在它下面的 xsx 子目录，所以播放页地址是 /xsx/index.html
       SRS_HTTP_SERVER_DIR: ./objs/nginx/html
+      # 以下是每一路流的默认设置：
+      # 发送数据时不合并小包（关闭 Nagle 算法），降低延迟
       SRS_VHOST_TCP_NODELAY: "on"
+      # 低延迟模式
       SRS_VHOST_MIN_LATENCY: "on"
+      # 不缓存关键帧组：延迟更低，代价是新打开的播放页要等到下一个关键帧才有画面（两三秒）
       SRS_VHOST_PLAY_GOP_CACHE: "off"
+      # 播放缓冲队列的长度（秒）：越小延迟越低，网络有抖动时越容易卡顿
       SRS_VHOST_PLAY_QUEUE_LENGTH: "1"
+      # 缓冲攒到多少毫秒就开始播放
       SRS_VHOST_PLAY_MW_LATENCY: "100"
+      # 不把收到的数据攒成一包再处理，来一帧处理一帧
       SRS_VHOST_PUBLISH_MR: "off"
+      # 把 RTMP 流同时以 HTTP-FLV 提供。/[app]/[stream].flv 在这里就是 /live/xsx.flv
       SRS_VHOST_HTTP_REMUX_ENABLED: "on"
       SRS_VHOST_HTTP_REMUX_MOUNT: "/[app]/[stream].flv"
     volumes:
       # 播放页的文件由接收端在启动时写进这个目录
       - ./xsx-files/www:/usr/local/srs/objs/nginx/html/xsx:ro
     ports:
+      # RTMP：宿主机的 1935 -> 容器的 1935
       - "${BIND_IP:-0.0.0.0}:1935:1935/tcp"
+      # HTTP（HTTP-FLV 和播放页）：宿主机的 8888 -> 容器的 8080
       - "${BIND_IP:-0.0.0.0}:8888:8080/tcp"
+      # 管理接口只开放给宿主机本机。接收端用的是 host 网络，通过 127.0.0.1:1985 访问它
       - "127.0.0.1:1985:1985/tcp"
     logging:
+      # 容器日志每个文件最大 5MB，最多留 2 个
       driver: json-file
       options:
         max-size: "5m"
         max-file: "2"
 
+  # 接收端：连上 Xbox 收画面，推给分发服务，同时提供管理页
   receiver:
     # 镜像名默认是 xsx-live/receiver:latest，和 GitHub Actions 导出的镜像包一致。
     # 本机没有这个镜像时，docker compose up 会按下面的 build 自己编译
@@ -60,37 +90,53 @@ services:
       dockerfile: receiver/Dockerfile
     container_name: xsx-receiver
     restart: unless-stopped
+    # 由 docker 的 init 进程当 1 号进程，负责回收接收端拉起的 ffmpeg 这类子进程
     init: true
+    # 直接用宿主机的网络：接收端要和 Xbox 在局域网里直接收发 UDP，也要访问宿主机上的分发服务
     network_mode: host
+    # 根文件系统只读。能写的只有下面挂进来的数据目录和 /tmp
     read_only: true
     # 进程已丢弃全部能力；数据目录里的文件属主未必是 root，没有 DAC_OVERRIDE 会读写不了
     cap_drop: [ALL]
     cap_add: [DAC_OVERRIDE]
+    # 禁止进程用 setuid 之类的方式提升权限
     security_opt: ["no-new-privileges:true"]
+    # /tmp 放在内存里，并且不执行其中的文件
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
     environment:
+      # Xbox 主机的局域网 IP。接收端只和这个地址收发音视频，必须填对
       XBOX_IP: "${XBOX_IP:-192.168.1.180}"
-      # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好
+      # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好。
+      # 微软账号的凭据文件：在管理页里登录后生成，之后由接收端自动续期
       XBOX_AUTH_FILE: /files/auth/session.json
+      # 运行状态目录：串流开关、当前状态和日志都写在这里
       STATE_DIR: /files/state
+      # 播放页的输出目录，启动时写入。上面分发服务挂载的就是它
       WWW_DIR: /files/www
-      # 监听在本机所有地址上，用任何一个 IP 都能打开管理页；用域名访问不了
+      # 管理页的监听地址。监听在本机所有地址上，用任何一个 IP 都能打开管理页；用域名访问不了
       DASHBOARD_BIND: "${DASHBOARD_BIND:-0.0.0.0:8099}"
+      # 别的设备访问分发服务用的地址，管理页用它拼出播放地址和拉流地址。要写成这台机器的局域网 IP
       MEDIA_HTTP_BASE: "${MEDIA_HTTP_BASE:-http://127.0.0.1:8888}"
+      # 接收端把流推到哪里，也就是分发服务的 RTMP 地址。接收端用 host 网络，所以是宿主机上的 127.0.0.1
       OUTPUT_RTMP: "${OUTPUT_RTMP:-rtmp://127.0.0.1:1935/live/xsx}"
-      # 日志带本地时间
+      # 时区，日志的每一行带本地时间
       TZ: "${TZ:-Asia/Shanghai}"
     volumes:
+      # 数据目录：凭据、状态、播放页都在这里。换成绝对路径后，数据就不跟着 compose 文件的位置走
       - ./xsx-files:/files
     depends_on:
+      # 先起分发服务
       - media
     healthcheck:
+      # 接收端定时写状态文件，这个命令检查状态文件是不是还新鲜
       test: ["CMD", "/usr/local/bin/xsx-native", "--healthcheck"]
       interval: 20s
       timeout: 5s
+      # 启动后先给 120 秒宽限
       start_period: 120s
       retries: 3
+    # 停止时最多等 30 秒，让接收端把远程会话收好尾
     stop_grace_period: 30s
     logging:
       driver: json-file
