@@ -36,7 +36,7 @@ The following terms are used throughout this document:
 | :--- | :--- |
 | Image | A read-only package holding a program together with its runtime. Import it and it runs. The receiver image is `xsx-live/receiver` |
 | Container | A running instance of an image. This service has two containers: the receiver `xsx-receiver` and the media server `xsx-media` |
-| Compose file | A YAML file describing which containers to start and how each is configured: the general `docker-compose.yml`, or `docker-compose.nas.yml` for NAS |
+| Compose file | A YAML file describing which containers to start and how each is configured: the general `docker-compose.yml`, or the ready-made files per NAS brand in [`compose/`](compose) |
 | Receiver | The program that connects to the Xbox, receives audio and video and publishes it to the media server. It also serves the dashboard |
 | Media server | The service that takes the published stream and offers it to streaming software and the player page. It uses SRS |
 | Dashboard | The web page for starting and stopping streaming, signing in and checking the status. Default address `http://<YOUR_HOST_IP>:8099/` |
@@ -136,30 +136,25 @@ Before you start:
 
 * An Xbox Series X|S on the **same LAN** as the machine running this service, and turned on (the receiver never wakes the console).
 * A Microsoft account, the one that is signed in on the console.
-* Docker and Docker Compose installed on the machine (Container Station already includes them), with access to Microsoft's sign-in and services.
+* Docker and Docker Compose installed on the machine (the NAS container suite already includes them), with access to Microsoft's sign-in and services.
 
-There are three ways to install. They only differ in where the receiver image comes from. **On a NAS, use option A**: only two settings need changing.
+The [`compose/`](compose) directory holds ready-made compose files per NAS brand. Copy one, change the places marked `TODO`, and paste it into the container manager of your NAS. The three ways to install only differ in where the receiver image comes from.
 
-### Option A: install on a NAS (recommended)
+### Option A: import the image archive (recommended for NAS)
 
-Shown with QNAP Container Station. Container managers on other NAS work similarly.
-
-1. **Import the image**. Download the archive `xsx-live-receiver-v1.0.0.tar.gz` from [Releases](../../releases) and decompress it to get the `.tar` file. In Container Station, open "Images" and click "Import", then pick that file. Afterwards `xsx-live/receiver:latest` appears in the image list.
-2. **Change two addresses**. Download [`docker-compose.nas.yml`](docker-compose.nas.yml), the compose file prepared for NAS. The two places to change are both marked `TODO`:
-   * `XBOX_IP`: the LAN IP of the Xbox console.
-   * `MEDIA_HTTP_BASE`: the LAN IP of this NAS followed by the HTTP port, for example `http://192.168.1.10:8888`.
-
-   If the shared folder of the NAS is not under `/share/ContainerStation/`, also change the two `xsx-files` paths in the file to the actual location.
-3. **Create the application**. In Container Station, open "Applications", click "Create", paste the edited file, then create and start it.
-4. **Sign in and start**. Open `http://<IP of the NAS>:8099/` in a browser, sign in under "Xbox account" (see "Sign in to the Xbox account" below), then click **Start streaming**.
+1. **Download the archive** from [Releases](../../releases): `xsx-live-receiver-v1.0.1.tar.gz`. Decompress it to get the `.tar`.
+2. **Import the image and create the application**, depending on your NAS brand:
+   * **QNAP (Container Station)**: copy [`compose/qnap.yml`](compose/qnap.yml). On "Images", click "Import" and pick the `.tar`. Change the place marked `TODO` in the file (only the console address). On "Applications", click "Create", paste the file, then create and start.
+   * **Synology (Container Manager, DSM 7.2 and above)**: copy [`compose/synology.yml`](compose/synology.yml). On "Image", click "Add" and choose "Add from file", then pick the `.tar`. On "Project", click "Create", choose a folder for the data, pick "Create docker-compose.yml", paste the edited file, and go through the wizard to the end.
+3. **Sign in and start**. Open `http://<IP of the NAS>:8099/` in a browser, sign in under "Xbox account" (see "Sign in to the Xbox account" below), then click **Start streaming**.
 
 ### Option B: pull from a registry
 
-For machines that can reach `ghcr.io`, the registry run by GitHub. Every version is published there automatically.
+No downloading or importing an archive. The NAS only needs access to `ghcr.io`, the registry run by GitHub. Every version is published there automatically, and the image is pulled when the application is created.
 
-1. Choose the image source: on a NAS, use [`docker-compose.nas.yml`](docker-compose.nas.yml) and change `image:` to `ghcr.io/<account>/xsx-live-receiver:<version>`. On the command line, use [`docker-compose.yml`](docker-compose.yml) and set `XSX_IMAGE=ghcr.io/<account>/xsx-live-receiver:<version>` in `.env` (copied from [`.env.example`](.env.example)).
-2. Pull the image: `docker compose pull`. In a NAS UI the pull happens when the application is created.
-3. From here on it is the same as option A from step 2.
+1. Copy the pull variant for your brand: [`compose/qnap-pull.yml`](compose/qnap-pull.yml) for QNAP, [`compose/synology-pull.yml`](compose/synology-pull.yml) for Synology.
+2. Change the two places marked `TODO`: the console address, and the account in `ghcr.io/<account>/` on the `image:` line (the GitHub account of the repository owner).
+3. Create the application as in option A for your brand (skip the image import).
 
 Image packages are private by default. The repository owner has to make the package public on the GitHub Packages page first (once public, it cannot be made private again) before others can pull it.
 
@@ -173,22 +168,24 @@ cd xsx-live
 cp .env.example .env
 ```
 
-When you run `docker compose up -d`, the receiver is compiled automatically. The first time takes a few minutes. See "Configuration" below for the settings.
+When you run `docker compose up -d`, the receiver is compiled automatically. The first time takes a few minutes. Settings go into `.env`; see "Configuration" below.
 
 ### Configuration
 
-Both compose files have the same settings. Most defaults can be used as they are. Usually only two need checking:
+In the NAS files, usually only the place marked `TODO` needs changing:
 
 | Setting | Change it to | Why |
 | :--- | :--- | :--- |
-| `XBOX_IP` | LAN IP of the Xbox console | The receiver exchanges audio and video with this address only, so streaming cannot work if it is wrong. Give the console a static IP. |
-| `MEDIA_HTTP_BASE` | `http://<YOUR_HOST_IP>:8888` | The dashboard generates the player and stream addresses from it. If it stays `127.0.0.1`, other devices get wrong addresses when they open the dashboard. |
+| `XBOX_IP` | LAN IP of the Xbox console | The receiver exchanges audio and video with this address only, so streaming cannot work if it is wrong. Give the console a static IP. Since 1.0.1 you can try leaving it unset: the receiver then uses the console address returned with the streaming session (experimental, see the FAQ below). |
 
-Where to change them depends on how you installed: in a NAS UI, change the values in the compose file directly. On the command line, change `.env`. `docker-compose.yml` needs no change. To change ports or the time zone, or to adjust other behavior, see "Environment variables" below.
+The rest have working defaults. Two worth knowing about:
+
+* `MEDIA_HTTP_BASE`: the default `http://127.0.0.1:8888` works as is (since 1.0.1). The dashboard generates the player and stream addresses from the IP you open it with. Only change the port here if the media HTTP port is not 8888.
+* Ports, the time zone and the other options are described under "Environment variables" below, and every one also has a comment in the compose file.
 
 ### After it starts
 
-* No files need to be prepared beforehand: the data directory `xsx-files/` is created on first start. See "Data directory" below for what is inside.
+* No files need to be prepared beforehand: the data directory is created on first start. See "Data directory" below for what is inside.
 * The dashboard and the player page are inside the image.
 * Check the running state:
 
@@ -197,7 +194,7 @@ docker compose ps
 docker compose logs -f receiver
 ```
 
-* The log is also written to `xsx-files/state/receiver.log`, one line per entry with local time.
+* The log is also written to `state/receiver.log` in the data directory, one line per entry with local time.
 * For moving to a new version, see "Updating" below.
 
 ---
@@ -294,14 +291,14 @@ Add a source in **Douyin Live Companion** or **OBS Studio**:
 
 ## ⚙️ Environment variables
 
-Usually only the two entries marked ★ need changing. Everything else has a working default. The `SRS_*` variables of the media server are low-latency tuning and normally stay as they are. The meaning of each one is written in the comments of [`docker-compose.yml`](docker-compose.yml).
+Usually only the entry marked ★ needs changing. Everything else has a working default. The `SRS_*` variables of the media server are low-latency tuning and normally stay as they are. The meaning of each one is written in the comments of [`docker-compose.yml`](docker-compose.yml).
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. **Must be correct.** The receiver exchanges audio and video with this address only, so give the console a static IP. |
+| ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. The receiver exchanges audio and video with this address only, so give the console a static IP. Since 1.0.1 it can be left unset (experimental): the receiver then uses the console address returned with the streaming session, retrying with `CONSOLE_ADDRESS_UNAVAILABLE` when none is available. |
 | `BIND_IP` | `0.0.0.0` | Address the SRS ports bind to on the host |
 | `DASHBOARD_BIND` | `0.0.0.0:8099` | Listen address of the dashboard. With `0.0.0.0` the page can be opened through any IP of the machine. |
-| ★ `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | Address other devices use to reach the media server. The dashboard builds the player and stream addresses from it. Set it to the LAN IP of this machine. |
+| `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | Address other devices use to reach the media server. The default works as is (since 1.0.1): the dashboard generates the player and stream addresses from the IP you open it with. Only change the port here if the media HTTP port is not 8888. |
 | `OUTPUT_RTMP` | `rtmp://127.0.0.1:1935/live/xsx` | RTMP target that the receiver publishes to |
 | `XBOX_AUTH_FILE` | `/files/auth/session.json` | Credential file inside the container |
 | `STATE_DIR` | `/files/state` | Directory for state and control files inside the container. The log `receiver.log` is written here too. |
@@ -368,6 +365,7 @@ To go back to an old version, import that version's image archive and recreate a
 
 * **Streaming stopped when the console shut down**: This is intended: when the console shuts down, the receiver ends the session and leaves the console alone while it powers off. Whether streaming starts again on the next power-on is decided by the "Start streaming when the console turns on" switch in the dashboard.
 
+* **`CONSOLE_ADDRESS_UNAVAILABLE` appears in the log**: `XBOX_IP` is unset and the streaming session did not return a usable console address. Set `XBOX_IP` to the LAN IP of the console in the compose file.
 * **How do I tell which version is running?**: Look at the dashboard footer, or at the first line of the log, `VERSION version=…`. See "Version numbers" above.
 
 ---
@@ -382,8 +380,8 @@ To go back to an old version, import that version's image archive and recreate a
 │   └── src/               Source code. Each module's job is described under "Architecture"
 ├── dashboard/             Static files of the dashboard: index.html, app.js, i18n.js, style.css
 ├── www/                   Player page: index.html and the mpegts.js it uses
-├── docker-compose.yml     General example configuration, with a comment on every setting
-├── docker-compose.nas.yml Configuration prepared for NAS. Only two addresses need changing
+├── docker-compose.yml     General example configuration (for local builds), with a comment on every setting
+├── compose/                Ready-made configurations for NAS, four files by brand and install way. Only the places marked TODO need changing
 ├── .env.example           Example environment variables
 ├── srs.conf               Reference configuration of the media server, equivalent to the SRS_* variables in the compose file
 └── .github/workflows/     GitHub Actions: tests, building the image, publishing

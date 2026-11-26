@@ -36,7 +36,7 @@
 | :--- | :--- |
 | 镜像 | 包含程序及其运行环境的只读文件包，导入后即可运行。接收端镜像为 `xsx-live/receiver` |
 | 容器 | 镜像的运行实例。本服务包含两个容器：接收端 `xsx-receiver` 和分发服务 `xsx-media` |
-| compose 文件 | 描述要启动哪些容器及其配置的 YAML 文件：通用的 `docker-compose.yml`，或 NAS 用的 `docker-compose.nas.yml` |
+| compose 文件 | 描述要启动哪些容器及其配置的 YAML 文件：通用的 `docker-compose.yml`，或 [`compose/`](compose) 目录下按 NAS 品牌准备好的现成文件 |
 | 接收端 | 连接 Xbox、接收音视频并推流给分发服务的程序，同时提供管理页 |
 | 分发服务 | 接收推流，并向直播软件、播放页提供拉流的服务，使用 SRS |
 | 管理页 | 启停串流、登录账号、查看状态的网页，默认地址 `http://<YOUR_HOST_IP>:8099/` |
@@ -136,30 +136,25 @@ sequenceDiagram
 
 * 一台 Xbox Series X|S，与运行这套服务的机器在**同一个局域网**内，并处于开机状态（接收端不会唤醒主机）。
 * 一个微软账号，即 Xbox 主机上登录的账号。
-* 机器上已安装 Docker 和 Docker Compose（Container Station 已包含），并且能访问微软的登录和服务。
+* 机器上已安装 Docker 和 Docker Compose（NAS 的容器管理套件已包含），并且能访问微软的登录和服务。
 
-有三种装法，区别只在接收端镜像的来源。**NAS 上用方式 A**，只需要修改两处配置。
+[`compose/`](compose) 目录下按 NAS 品牌准备了现成的 compose 文件，复制一份、按文件里 `TODO` 标记改好，贴进 NAS 的容器管理界面即可。三种装法的区别只在接收端镜像从哪来。
 
-### 方式 A：在 NAS 上安装（推荐）
+### 方式 A：导入镜像包（NAS 推荐）
 
-以 QNAP Container Station 为例，其他 NAS 的容器管理界面操作类似。
-
-1. **导入镜像**。在 [Releases](../../releases) 下载镜像包 `xsx-live-receiver-v1.0.0.tar.gz`，解压得到 `.tar` 文件；在 Container Station 的「映像」页点「导入」并选中它。导入后，映像列表中会出现 `xsx-live/receiver:latest`。
-2. **修改两处地址**。下载 [`docker-compose.nas.yml`](docker-compose.nas.yml)，这是为 NAS 准备好的 compose 文件，需要修改的两处均已用 `TODO` 标出：
-   * `XBOX_IP`：Xbox 主机的局域网 IP。
-   * `MEDIA_HTTP_BASE`：这台 NAS 的局域网 IP 加 HTTP 端口，例如 `http://192.168.1.10:8888`。
-
-   NAS 的共享文件夹不在 `/share/ContainerStation/` 下时，再把文件中两处 `xsx-files` 的路径改为实际位置。
-3. **创建应用**。在 Container Station 的「应用程序」页点「创建」，贴入修改后的文件内容，创建并启动。
-4. **登录并开始**。浏览器打开 `http://<NAS 的 IP>:8099/`，在「Xbox 账号」中登录（见下文「登录 Xbox 账号」），然后点「开启串流」。
+1. **下载镜像包**。到 [Releases](../../releases) 页面下载 `xsx-live-receiver-v1.0.1.tar.gz`，解压得到 `.tar`。
+2. **导入镜像并创建应用**，按 NAS 品牌操作：
+   * **QNAP（Container Station）**：复制 [`compose/qnap.yml`](compose/qnap.yml)。「映像」页点「导入」，选中解压出的 `.tar`；把文件里标 `TODO` 的地方改成自己的（只有主机地址一处）；「应用程序」页点「创建」，贴入文件内容，创建并启动。
+   * **群晖（Container Manager，DSM 7.2 及以上）**：复制 [`compose/synology.yml`](compose/synology.yml)。「映像」页点「新增」→「从文件添加」，选中解压出的 `.tar`；「项目」页点「新增」，路径选一个存放数据的文件夹，选「创建 docker-compose.yml」，贴入改好的文件内容，一路下一步直到完成。
+3. **登录并开始**。浏览器打开 `http://<NAS 的 IP>:8099/`，在「Xbox 账号」中登录（见下文「登录 Xbox 账号」），然后点「开启串流」。
 
 ### 方式 B：从镜像仓库拉取
 
-适用于能访问 `ghcr.io`（GitHub 运营的镜像仓库）的机器，每个版本发布后都会自动发布到这里。
+不需要下载和导入镜像包，NAS 能访问 `ghcr.io`（GitHub 运营的镜像仓库）即可，创建应用时自动拉取镜像。每个版本发布后都会自动发布到这里。
 
-1. 指定镜像来源：NAS 上使用 [`docker-compose.nas.yml`](docker-compose.nas.yml)，把 `image:` 改为 `ghcr.io/<账号>/xsx-live-receiver:<版本>`；命令行下使用 [`docker-compose.yml`](docker-compose.yml)，在 `.env`（由 [`.env.example`](.env.example) 复制）中设置 `XSX_IMAGE=ghcr.io/<账号>/xsx-live-receiver:<版本>`。
-2. 拉取镜像：`docker compose pull`。NAS 界面在创建应用时自动拉取。
-3. 之后与方式 A 从第 2 步起相同。
+1. 复制对应品牌的拉取版文件：QNAP 用 [`compose/qnap-pull.yml`](compose/qnap-pull.yml)，群晖用 [`compose/synology-pull.yml`](compose/synology-pull.yml)。
+2. 把文件里标 `TODO` 的两处改成自己的：主机地址，以及 `image:` 里 `ghcr.io/<账号>/` 中的账号（仓库所有者的 GitHub 账号）。
+3. 按方式 A 中对应品牌的步骤创建应用（跳过导入镜像）。
 
 镜像包默认是私有的，仓库所有者需先在 GitHub 的 Packages 页面将其改为公开（此后不能再改回私有），其他用户才能拉取。
 
@@ -173,22 +168,24 @@ cd xsx-live
 cp .env.example .env
 ```
 
-执行 `docker compose up -d` 时会自动编译接收端，首次需要几分钟。配置方法见下面的「配置」。
+执行 `docker compose up -d` 时会自动编译接收端，首次需要几分钟。配置项在 `.env` 中修改，见下面的「配置」。
 
 ### 配置
 
-两个 compose 文件的配置项相同，默认值大多可以直接使用，通常只需确认两项：
+NAS 用的文件里，通常只需要改 `TODO` 标出的那一处：
 
 | 配置项 | 改成什么 | 原因 |
 | :--- | :--- | :--- |
-| `XBOX_IP` | Xbox 主机的局域网 IP | 接收端只和这个地址收发音视频，填错无法连接。建议给主机设置固定 IP |
-| `MEDIA_HTTP_BASE` | `http://<YOUR_HOST_IP>:8888` | 管理页上的播放地址和拉流地址由它生成。保持 `127.0.0.1` 时，其他设备打开管理页得到的地址是错误的 |
+| `XBOX_IP` | Xbox 主机的局域网 IP | 接收端只和这个地址收发音视频，填错无法连接。建议给主机设置固定 IP。1.0.1 起可以试着不填：接收端改用建立会话时微软返回的主机地址（试验性，见下文 FAQ） |
 
-修改位置取决于安装方式：NAS 界面下直接修改 compose 文件中对应的值；命令行下修改 `.env`，`docker-compose.yml` 无需改动。更换端口、时区或调整其他行为，见下文「环境变量说明」。
+其余配置都有可用的默认值，其中两个值得知道：
+
+* `MEDIA_HTTP_BASE`：保持默认 `http://127.0.0.1:8888` 即可（1.0.1 起）。管理页会自动用你访问它时所用的 IP 生成播放地址和拉流地址。只有分发服务的 HTTP 端口不是 8888 时才需要改这里的端口。
+* 端口、时区等其余选项见下文「环境变量说明」，每一项的含义也写在 compose 文件的注释里。
 
 ### 启动之后
 
-* 无需提前准备任何文件：数据目录 `xsx-files/` 在首次启动时自动生成，内容见下文「数据目录」。
+* 无需提前准备任何文件：数据目录会在首次启动时自动生成，内容见下文「数据目录」。
 * 管理页和播放页均打包在镜像内。
 * 查看运行状态：
 
@@ -197,7 +194,7 @@ docker compose ps
 docker compose logs -f receiver
 ```
 
-* 日志同时写入 `xsx-files/state/receiver.log`，每行带本地时间。
+* 日志同时写入数据目录的 `state/receiver.log`，每行带本地时间。
 * 升级到新版本的方法见下文「更新版本」。
 
 ---
@@ -294,14 +291,14 @@ Xbox 远程串流需要微软账号授权。打开管理页，在「Xbox 账号�
 
 ## ⚙️ 环境变量说明
 
-通常只需要改标了 ★ 的两项，其余都有可用的默认值。分发服务的 `SRS_*` 变量是为低延迟做的调校，平时不用动，每一项的含义写在 [`docker-compose.yml`](docker-compose.yml) 的注释里。
+通常只需要改标了 ★ 的一项，其余都有可用的默认值。分发服务的 `SRS_*` 变量是为低延迟做的调校，平时不用动，每一项的含义写在 [`docker-compose.yml`](docker-compose.yml) 的注释里。
 
 | 变量名 | 默认值 | 描述 |
 | :--- | :--- | :--- |
-| ★ `XBOX_IP` | `192.168.1.180` | Xbox 主机的局域网 IP，**必须填对**。接收端只和这个地址收发音视频，建议给主机设固定 IP |
+| ★ `XBOX_IP` | `192.168.1.180` | Xbox 主机的局域网 IP，接收端只和这个地址收发音视频，建议给主机设固定 IP。1.0.1 起可不设（试验性）：接收端改用建立会话时微软返回的主机地址，取不到时以 `CONSOLE_ADDRESS_UNAVAILABLE` 重试 |
 | `BIND_IP` | `0.0.0.0` | SRS 端口在宿主机的监听绑定 IP |
 | `DASHBOARD_BIND` | `0.0.0.0:8099` | 管理页面监听 IP 与端口。写成 `0.0.0.0` 即可用本机任意 IP 访问 |
-| ★ `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | 别的设备访问分发服务用的地址，管理页用它拼出播放地址和拉流地址。要写成这台机器的局域网 IP |
+| `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | 别的设备访问分发服务用的地址。保持默认即可（1.0.1 起）：管理页自动用访问它时所用的 IP 生成播放和拉流地址。只有分发服务的 HTTP 端口不是 8888 时才需要改这里的端口 |
 | `OUTPUT_RTMP` | `rtmp://127.0.0.1:1935/live/xsx` | 接收器推流至 SRS 的目标 RTMP 地址 |
 | `XBOX_AUTH_FILE` | `/files/auth/session.json` | 容器内认证凭据文件路径 |
 | `STATE_DIR` | `/files/state` | 容器内状态与控制文件落盘目录，日志 `receiver.log` 也写在这里 |
@@ -368,6 +365,7 @@ xsx-files/
 
 * **主机关机后串流停了**：这是预期行为：主机关机时接收端会结束会话，不去打扰它关机。下次开机是否自动开始，看管理页的「开机自动串流」开关。
 
+* **日志里出现 `CONSOLE_ADDRESS_UNAVAILABLE`**：没有设置 `XBOX_IP`，而且建立会话时微软没有返回可用的主机地址。在 compose 文件里把 `XBOX_IP` 填成主机的局域网 IP 即可。
 * **怎么确认跑的是哪一版**：看管理页页脚，或者日志第一行的 `VERSION version=…`，见上文「版本号」。
 
 ---
@@ -382,8 +380,8 @@ xsx-files/
 │   └── src/               源码，各模块的职责见上文「架构设计」
 ├── dashboard/             管理页的静态文件：index.html、app.js、i18n.js、style.css
 ├── www/                   播放页：index.html 和它用的 mpegts.js
-├── docker-compose.yml     通用的示例配置，每一项都有注释
-├── docker-compose.nas.yml 给 NAS 准备的配置，只需修改两处地址
+├── docker-compose.yml     通用的示例配置（本机编译用），每一项都有注释
+├── compose/                给 NAS 准备好的配置，按品牌和装法分四份，只需修改 TODO 标出的地方
 ├── .env.example           环境变量示例
 ├── srs.conf               分发服务的参考配置，和 compose 里的 SRS_* 变量等价
 └── .github/workflows/     GitHub Actions：测试、编译镜像、发布

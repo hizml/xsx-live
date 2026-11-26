@@ -105,7 +105,8 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
     environment:
-      # Xbox 主机的局域网 IP。接收端只和这个地址收发音视频，必须填对
+      # Xbox 主机的局域网 IP。接收端只和这个地址收发音视频。不设时（1.0.1 起，试验性）接收端改用
+      # 建立会话时微软返回的主机地址，取不到会以 CONSOLE_ADDRESS_UNAVAILABLE 重试
       XBOX_IP: "${XBOX_IP:-192.168.1.180}"
       # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好。
       # 微软账号的凭据文件：在管理页里登录后生成，之后由接收端自动续期
@@ -116,7 +117,8 @@ services:
       WWW_DIR: /files/www
       # 管理页的监听地址。监听在本机所有地址上，用任何一个 IP 都能打开管理页；用域名访问不了
       DASHBOARD_BIND: "${DASHBOARD_BIND:-0.0.0.0:8099}"
-      # 别的设备访问分发服务用的地址，管理页用它拼出播放地址和拉流地址。要写成这台机器的局域网 IP
+      # 别的设备访问分发服务用的地址。保持默认即可（1.0.1 起）：管理页自动用访问它时所用的 IP 生成播放和
+      # 拉流地址。只有 media 的 HTTP 端口不是 8888 时，才需要改这里的端口
       MEDIA_HTTP_BASE: "${MEDIA_HTTP_BASE:-http://127.0.0.1:8888}"
       # 接收端把流推到哪里，也就是分发服务的 RTMP 地址。接收端用 host 网络，所以是宿主机上的 127.0.0.1
       OUTPUT_RTMP: "${OUTPUT_RTMP:-rtmp://127.0.0.1:1935/live/xsx}"
