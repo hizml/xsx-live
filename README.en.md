@@ -176,7 +176,7 @@ In the NAS files, usually only the place marked `TODO` needs changing:
 
 | Setting | Change it to | Why |
 | :--- | :--- | :--- |
-| `XBOX_IP` | LAN IP of the Xbox console | Since 1.1.0 it can be left unset (experimental): the receiver takes the console address and port from the session configuration automatically, retrying with `CONSOLE_ADDRESS_UNAVAILABLE` when none is available, in which case set it. When set, it must be correct. Give the console a static IP. |
+| `XBOX_IP` | LAN IP of the Xbox console | It can be left unset: the receiver then takes the console address from the candidates Microsoft pushes during connection (`XBOX_IP` wins when set). When set, it must be correct. Give the console a static IP. |
 
 The rest have working defaults. Two worth knowing about:
 
@@ -296,7 +296,7 @@ Usually only the entry marked ★ needs changing. Everything else has a working 
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. When set, it must be correct; give the console a static IP. Since 1.1.0 it can be left unset (experimental): the receiver takes the console address and port from the session configuration, retrying with `CONSOLE_ADDRESS_UNAVAILABLE` when none is available. |
+| ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. When set, it must be correct; give the console a static IP. It can also be left unset: the receiver takes the console address from the candidates Microsoft pushes during connection. |
 | `BIND_IP` | `0.0.0.0` | Address the SRS ports bind to on the host |
 | `DASHBOARD_BIND` | `0.0.0.0:31099` | Listen address of the dashboard. With `0.0.0.0` the page can be opened through any IP of the machine. |
 | `MEDIA_HTTP_BASE` | `http://127.0.0.1:31888` | Address other devices use to reach the media server. The default works as is (since 1.0.1): the dashboard generates the player and stream addresses from the IP you open it with. Keep the port in line with the media HTTP port (31888 in the example configurations). |
@@ -366,7 +366,6 @@ To go back to an old version, import that version's image archive and recreate a
 
 * **Streaming stopped when the console shut down**: This is intended: when the console shuts down, the receiver ends the session and leaves the console alone while it powers off. Whether streaming starts again on the next power-on is decided by the "Start streaming when the console turns on" switch in the dashboard.
 
-* **`CONSOLE_ADDRESS_UNAVAILABLE` appears in the log**: `XBOX_IP` is unset and the automatic lookup found no console address. Set `XBOX_IP` to the LAN IP of the console in the compose file.
 * **The media image cannot be pulled when creating the application**: the compose files use the copy in this repository's ghcr (`ghcr.io/hizml/xsx-live-media:5`) by default, so Docker Hub is not needed. To use the official address instead, change `image:` back to `ossrs/srs:5` (on Docker Hub; configure a registry mirror if it is unreachable).
 * **How do I tell which version is running?**: Look at the dashboard footer, or at the first line of the log, `VERSION version=…`. See "Version numbers" above.
 

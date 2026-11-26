@@ -263,21 +263,17 @@ async fn main()->Result<()> {
  log!("STOPPED");Ok(())
 }
 // 接收端要连的主机地址和端口。XBOX_IP 设了就以它为准（端口用固定的 9002），现有安装的行为不变；
-// 没设时用会话回应里带的主机地址和端口（主要来自 /configuration），取不到就报一个能认出来的原因
-// （CONSOLE_ADDRESS_UNAVAILABLE），主循环稍后重试
-fn console_address(configured:Option<&str>,cfg:&xsx_native::xhome::StreamConfig)->Result<SocketAddr>{
- let from_session=cfg.console_ipv4_endpoint();
+// 没设时不提前定地址：等微软把主机的连接候选推过来直接采用（真机实测 serverDetails 里是占位假地址，
+// 真地址在候选里，见 ICE_REMOTE 日志）
+fn console_address(configured:Option<&str>,cfg:&xsx_native::xhome::StreamConfig)->Result<Option<SocketAddr>>{
+ let session_details=cfg.console_ipv4_endpoint().map(|(a,p)|format!("{a}:{p}")).unwrap_or_else(||"none".into());
  let Some(value)=configured.map(str::trim).filter(|value|!value.is_empty())else{
-  let (address,port)=from_session.ok_or_else(||anyhow!("CONSOLE_ADDRESS_UNAVAILABLE"))?;
-  log!("CONSOLE_ADDRESS source=session endpoint={address}:{port}");return Ok(SocketAddr::new(IpAddr::V4(address),port));
+  log!("CONSOLE_ADDRESS source=ice_candidates session_details={session_details}");
+  return Ok(None);
  };
  let address:IpAddr=value.parse().context("XBOX_IP 要写成一个 IP 地址")?;
- // 诊断用：显式配置时也记下会话回应里给出的地址，并和配置比一下，据此判断不配置行不行
- let session_text=from_session.map(|(a,p)|format!("{a}:{p}")).unwrap_or_else(||"none".into());
- let configured_v4=match address{IpAddr::V4(v4)=>Some(v4),IpAddr::V6(v6)=>v6.to_ipv4_mapped()};
- let is_same=from_session.is_some_and(|(session,port)|Some(session)==configured_v4&&port==9002);
- log!("CONSOLE_ADDRESS source=config configured={address}:9002 session={session_text} is_same={is_same}");
- Ok(SocketAddr::new(address,9002))
+ log!("CONSOLE_ADDRESS source=config configured={address}:9002 session_details={session_details}");
+ Ok(Some(SocketAddr::new(address,9002)))
 }
 async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tokio::sync::watch::Receiver<xsx_native::control::ControlState>,revision:u64)->Result<()> {
  let setup=async {
@@ -311,7 +307,7 @@ async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tok
  let address=console_address(std::env::var("XBOX_IP").ok().as_deref(),&cfg);
  let result=match address{
   Ok(console)=>tokio::select! {
-   value=receive(&client,&cfg.session_path,revision,console_off,console)=>value,
+   value=receive(&client,&cfg.session_path,revision,console_off,console.clone())=>value,
    _=shutdown.changed()=>{log!("STOP_REQUESTED");Ok(())},
    _=wait_for_revision_change(control.clone(),revision)=>{log!("CONTROL_SESSION_END");Ok(())}
   },
@@ -323,9 +319,13 @@ async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tok
  }
  result
 }
-async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::sync::watch::Receiver<bool>,console:SocketAddr)->Result<()>{
- let xbox_ip=console.ip();let console_port=console.port();
- let probe=StdUdpSocket::bind("0.0.0.0:0")?;probe.connect(console)?;let local_ip=probe.local_addr()?.ip();drop(probe);
+async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::sync::watch::Receiver<bool>,console:Option<SocketAddr>)->Result<()>{
+ // 选网卡用的探测：对 UDP 调 connect 不会真发包，只是让系统按路由选一张网卡。
+// 自动模式（没配 XBOX_IP）不知道主机地址，用公网地址选默认路由的那张；配置了就直接对主机选
+ let probe_target=console.unwrap_or_else(||"8.8.8.8:80".parse().expect("常量地址"));
+ let probe=StdUdpSocket::bind("0.0.0.0:0")?;probe.connect(probe_target)?;let local_ip=probe.local_addr()?.ip();drop(probe);
+ // 主机的地址：配置了就有；自动模式从收到的第一条主机候选里学到
+ let mut peer_ip:Option<IpAddr>=console.map(|console|console.ip());
  let udp=UdpSocket::bind(SocketAddr::new(local_ip,0)).await?;let local=udp.local_addr()?;
  let mut rtc=Rtc::new(Instant::now());rtc.add_local_candidate(Candidate::host(local,"udp").map_err(|e|anyhow!("{e}"))?);
  let mut control=None;let mut message=None;let mut input=None;
@@ -346,10 +346,11 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
  log!("SDP dtls={} sdes={}",answer.contains("a=fingerprint:"),answer.contains("a=crypto:"));
  let filtered=answer.lines().filter(|l|!l.starts_with("a=candidate:")).collect::<Vec<_>>().join("\r\n")+"\r\n";
  rtc.sdp_api().accept_answer(pending,SdpAnswer::from_sdp_string(&filtered).map_err(|e|anyhow!("{e}"))?).map_err(|e|anyhow!("{e}"))?;
- let direct=format!("candidate:1 1 UDP 2130706431 {} {} typ host",xbox_ip,console_port);
- rtc.add_remote_candidate(Candidate::from_sdp_string(&direct).map_err(|e|anyhow!("{e}"))?);
+ // 配置了 XBOX_IP 时手动补一条主机候选；自动模式不补，等微软推来真地址
+ let direct=console.map(|console|format!("candidate:1 1 UDP 2130706431 {} {} typ host",console.ip(),console.port()));
+ if let Some(direct)=&direct{rtc.add_remote_candidate(Candidate::from_sdp_string(direct).map_err(|e|anyhow!("{e}"))?);}
  for c in offer.lines().filter_map(|l|l.strip_prefix("a=")).filter(|l|l.starts_with("candidate:")){let _=client.send_ice_candidate(path,c).await;}
- log!("LAN_ONLY peer={} local={}",xbox_ip,local.ip());
+ log!("LAN_ONLY peer={} local={}",direct.as_ref().map(|d|d.split_whitespace().nth(4).unwrap_or("?").to_owned()).unwrap_or_else(||"ice_candidates".into()),local.ip());
  let mut relay=match std::env::var("OUTPUT_RTMP"){Ok(url)=>Some(MediaRelay::new(&url)?),Err(_)=>None};
  let mut last_video=Instant::now();let mut input_seq=0u32;let mut last_keyframe=Instant::now();
  let idle_keepalive_enabled=std::env::var("IDLE_KEEPALIVE").map(|v|v.trim()!="0").unwrap_or(true);
@@ -363,7 +364,7 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
   let deadline=loop{
    match rtc.poll_output().map_err(|e|anyhow!("{e}"))?{
     Output::Timeout(t)=>break t,
-    Output::Transmit(t)=>{if t.destination.ip()==xbox_ip{let _=udp.send_to(&t.contents,t.destination).await;}}
+    Output::Transmit(t)=>{if peer_ip.is_none_or(|peer|t.destination.ip()==peer){let _=udp.send_to(&t.contents,t.destination).await;}}
     Output::Event(ev)=>match ev{
      Event::Connected=>{connected=true;log!("WEBRTC_CONNECTED seconds={:.2}",started.elapsed().as_secs_f64());}
      Event::IceConnectionStateChange(s)=>log!("ICE {:?}",s),
@@ -394,7 +395,7 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
   };
   if last_print.elapsed()>Duration::from_secs(5){
    log!("MEDIA video_frames={} audio_packets={} video_bytes={} audio_bytes={} keyframes={}",vf,af,vb,ab,keyframes);
-   xsx_native::health::update(if vf>0&&af>0{"streaming"}else{"connecting"},serde_json::json!({"control_revision":revision,"video_frames":vf,"audio_packets":af,"video_bytes":vb,"audio_bytes":ab,"keyframes":keyframes,"elapsed_seconds":started.elapsed().as_secs(),"lan_peer":xbox_ip.to_string()}))?;
+   xsx_native::health::update(if vf>0&&af>0{"streaming"}else{"connecting"},serde_json::json!({"control_revision":revision,"video_frames":vf,"audio_packets":af,"video_bytes":vb,"audio_bytes":ab,"keyframes":keyframes,"elapsed_seconds":started.elapsed().as_secs(),"lan_peer":peer_ip.map(|peer|peer.to_string()).unwrap_or_else(||"pending".into())}))?;
    last_print=Instant::now();
   }
   if *power_off.borrow(){bail!("CONSOLE_POWER_OFF");}
@@ -402,7 +403,7 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
   if !connected&&started.elapsed()>Duration::from_secs(25){bail!("LAN connection timed out");}
   if connected&&last_video.elapsed()>Duration::from_secs(20){bail!("Video receive watchdog timed out");}
   tokio::select!{
-   r=udp.recv_from(&mut buf)=>{let(n,src)=r?;if src.ip()==xbox_ip{let input=Receive::new(Protocol::Udp,src,local,&buf[..n]).map_err(|e|anyhow!("{e}"))?;rtc.handle_input(Input::Receive(Instant::now(),input)).map_err(|e|anyhow!("{e}"))?;}}
+   r=udp.recv_from(&mut buf)=>{let(n,src)=r?;if peer_ip.is_none_or(|peer|src.ip()==peer){let input=Receive::new(Protocol::Udp,src,local,&buf[..n]).map_err(|e|anyhow!("{e}"))?;rtc.handle_input(Input::Receive(Instant::now(),input)).map_err(|e|anyhow!("{e}"))?;}}
    // 微脉冲只保持一小会儿就回中，不等下一个 tick
    _=tokio::time::sleep(recenter_at.unwrap_or_else(Instant::now).saturating_duration_since(Instant::now())),if recenter_at.is_some()=>{
     send_gamepad(&mut rtc,input,&mut input_seq,&xsx_native::rtc::input::GamepadFrame::neutral(),started.elapsed());
@@ -411,7 +412,12 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
    _=tokio::time::sleep(deadline.saturating_duration_since(Instant::now()))=>{rtc.handle_input(Input::Timeout(Instant::now())).map_err(|e|anyhow!("{e}"))?;}
    _=tick.tick()=>{
     if let Some(out)=relay.as_mut(){out.tick()?;}
-    if !connected{if let Ok(candidates)=client.poll_ice_candidates(path).await{for c in candidates{let parts=c.candidate.split_whitespace().collect::<Vec<_>>();if parts.get(4).is_some_and(|v|*v==xbox_ip.to_string()){if let Ok(c)=Candidate::from_sdp_string(&c.candidate){rtc.add_remote_candidate(c);}}else if !seen.contains_key("ice_remote"){seen.insert("ice_remote".into(),1);let sample:String=c.candidate.chars().take(120).collect();log!("ICE_REMOTE first={sample}");}}}}
+    if !connected{if let Ok(candidates)=client.poll_ice_candidates(path).await{for c in candidates{let parts=c.candidate.split_whitespace().collect::<Vec<_>>();
+     // 配置了 XBOX_IP：只认和它一致的候选。自动模式：认「主机型 + 私有 IPv4 + 不是本机自己」的候选
+     let wanted=match console{Some(console)=>parts.get(4).is_some_and(|v|*v==console.ip().to_string()),
+      None=>parts.get(7)==Some(&"host")&&parts.get(4).and_then(|v|v.parse::<std::net::Ipv4Addr>().ok()).is_some_and(|a|a.is_private()&&a.to_string()!=local_ip.to_string())};
+     if wanted{let sample:String=c.candidate.chars().take(120).collect();let key=format!("ice_add_{}",parts.get(4).unwrap_or(&"?"));if!seen.contains_key(&key){seen.insert(key,1);log!("ICE_REMOTE accepted={sample}");}if let Some(addr)=parts.get(4).and_then(|v|v.parse::<IpAddr>().ok()){peer_ip=Some(addr);}if let Ok(parsed)=Candidate::from_sdp_string(&c.candidate){rtc.add_remote_candidate(parsed);}}
+     else if !seen.contains_key("ice_remote"){seen.insert("ice_remote".into(),1);let sample:String=c.candidate.chars().take(120).collect();log!("ICE_REMOTE skipped={sample}");}}}}
     if handshake&&recenter_at.is_none(){
      if last_keyframe.elapsed()>Duration::from_secs(2){write_dc(&mut rtc,control,&protocol::keyframe_request());last_keyframe=Instant::now();}
      if pad.tick(&mut rtc,control,input,&mut input_seq,started.elapsed())==PadStep::Pulse{recenter_at=Some(Instant::now()+RECENTER_DELAY);}
@@ -541,18 +547,23 @@ mod tests {
     fn configured_console_address_wins(){
         let session=session_with_console(Some("192.168.1.10"),Some(9004));
         let expected:SocketAddr="192.168.1.180:9002".parse().unwrap();
-        assert_eq!(console_address(Some("192.168.1.180"),&session).unwrap(),expected);
+        assert_eq!(console_address(Some("192.168.1.180"),&session).unwrap(),Some(expected));
         assert!(console_address(Some("not-an-ip"),&session).unwrap_err().to_string().contains("XBOX_IP"));
-        assert_eq!(console_address(Some("  "),&session).unwrap(),"192.168.1.10:9004".parse().unwrap(),"只有空白等同于没设");
+        assert_eq!(console_address(Some("  "),&session).unwrap(),None,"只有空白等同于没设，走自动模式");
     }
-    // 没设 XBOX_IP 时用会话回应里的主机地址和端口；端口依次取 ipV4Port/udpPort/port，都没有用 9002
+    // 没设 XBOX_IP 时不提前定地址（返回 None），建连接时听微软推来的候选；serverDetails 只当诊断参考
     #[test]
-    fn console_address_falls_back_to_the_session_response(){
-        assert_eq!(console_address(None,&session_with_console(Some("192.168.1.10"),Some(9004))).unwrap(),"192.168.1.10:9004".parse().unwrap());
-        assert_eq!(console_address(None,&session_with_console(Some("192.168.1.10"),None)).unwrap(),"192.168.1.10:9002".parse().unwrap(),"没有端口时用 9002");
-        for unusable in [Some("203.0.113.5"),Some("192.0.2.1"),Some("not-an-ip"),None]{
-            let error=console_address(None,&session_with_console(unusable,Some(9002))).unwrap_err().to_string();
-            assert!(error.contains("CONSOLE_ADDRESS_UNAVAILABLE"),"{unusable:?} 不该被当成主机地址：{error}");
+    fn auto_mode_defers_to_ice_candidates(){
+        for details in [Some(("192.168.1.10",Some(9004))),Some(("10.0.0.1",Some(0))),None]{
+            let (ipv4,port)=details.map(|(a,p)|(Some(a),p)).unwrap_or((None,None));
+            assert_eq!(console_address(None,&session_with_console(ipv4,port)).unwrap(),None);
         }
+    }
+    // serverDetails 里端口为 0 的是占位假地址，不算数
+    #[test]
+    fn placeholder_session_details_are_ignored(){
+        assert_eq!(session_with_console(Some("10.0.0.1"),Some(0)).console_ipv4_endpoint(),None);
+        assert_eq!(session_with_console(Some("192.168.1.10"),Some(9004)).console_ipv4_endpoint(),Some(("192.168.1.10".parse().unwrap(),9004)));
+        assert_eq!(session_with_console(Some("203.0.113.5"),Some(9002)).console_ipv4_endpoint(),None,"公网地址不算");
     }
 }

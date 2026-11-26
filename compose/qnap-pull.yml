@@ -109,7 +109,7 @@ services:
       - /tmp:rw,noexec,nosuid,size=16m
     environment:
       # TODO（建议填写）：改成 Xbox 主机的局域网 IP，接收端只和这个地址收发音视频。
-      # 1.1.0 起也可以不填（试验性）：不填时接收端自动从会话配置取主机地址；连不上再填回来
+      # 也可以不填：不填时接收端直接采用微软推来的主机候选地址；连不上再填回来
       XBOX_IP: "192.168.1.180"
       # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好
       XBOX_AUTH_FILE: /files/auth/session.json

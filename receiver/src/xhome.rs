@@ -73,8 +73,9 @@ impl StreamConfig {
         let address = [&details.ipv4_address, &details.ip_address].into_iter().flatten()
             .filter_map(|address| address.trim().parse::<Ipv4Addr>().ok())
             .find(|address| address.is_private())?;
-        let port = details.ipv4_port.or(details.udp_port).or(details.port).unwrap_or(9002);
-        Some((address, port))
+        let port = details.ipv4_port.or(details.udp_port).or(details.port).unwrap_or(0);
+        // 真机上见过 10.0.0.1:0 这种占位假地址，端口为 0 的一律不算数
+        (port > 0).then_some((address, port))
     }
 }
 
