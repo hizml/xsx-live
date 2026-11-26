@@ -256,7 +256,7 @@ Open the dashboard in a browser:
 * **Start streaming when the console turns on**: streaming stops when the console shuts down. When this is on, it starts again on the next power-on; when off, tap **Start streaming** yourself.
 * **Language**: switch between "中文" and "EN" at the top right of the page. See "Languages" below.
 
-The dashboard only accepts access by IP (for example `http://192.168.1.10:31099/`). Access by hostname returns 403. This prevents another site from pointing its own domain at this machine and impersonating the dashboard.
+The dashboard only accepts access by IP plus port, for example `http://192.168.1.10:31099/` (on the machine itself, use `http://127.0.0.1:31099/`). Access by hostname returns 403, and `localhost` counts as a hostname too. This defends against DNS rebinding: a site on the public Internet can point its own domain at your LAN IP and let your browser reach the dashboard and its API on its behalf. Accepting IPs only keeps such requests out.
 
 > Controller and keep-alive: the receiver sends no gamepad data in normal operation. During the handshake after power-on it "says hello" to the console once (registers a virtual gamepad, sends two neutral input frames and releases immediately) so the session is not ended for having no client. After about 10 minutes without controller input the console warns about being idle and disconnects 120 seconds later. At that point the receiver nudges the left stick to 12.5% and recenters it after 40 ms (the same thing the official Microsoft web client does), and nudges again half a minute later as a safety net. Each nudge shows "<gamertag> is remote playing" on the console screen. Set `IDLE_KEEPALIVE` to `0` to turn this off, at the cost of being disconnected after a long idle period.
 
@@ -347,7 +347,7 @@ To go back to an old version, import that version's image archive and recreate a
 
 ## ❓ FAQ
 
-* **The dashboard returns 403**: The dashboard only accepts access by IP, for example `http://192.168.1.10:31099/`, and the port has to match `DASHBOARD_BIND`. Access by hostname, or with the wrong port, returns 403.
+* **The dashboard returns 403**: The dashboard only accepts access by IP, for example `http://192.168.1.10:31099/` (`127.0.0.1` on the machine itself), and the port has to match `DASHBOARD_BIND`. Hostnames, including `localhost`, are rejected. Access by hostname, or with the wrong port, returns 403.
 
 * **The status stays on "Waiting for XSX to turn on"**: The receiver never wakes the console. Turn the console on and it connects by itself. The matching reason in the log is `CONSOLE_OFFLINE`.
 
