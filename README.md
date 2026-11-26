@@ -104,57 +104,52 @@ sequenceDiagram
 
 ## 🚀 快速上手
 
-### 1. 克隆仓库与准备环境
+一共三种装法，区别只在接收端镜像从哪来。**用 NAS 或者不想编译的，选第一种**。装好之后的配置和登录，三种都一样。
 
-确保已安装 `docker` 和 `docker compose`：
+### 方式一：导入现成的镜像包（NAS 推荐）
+
+1. 下载镜像包：到仓库的 [Releases](../../releases) 页面，文件名形如 `xsx-live-receiver-v1.0.0.tar.gz`，解压得到 `.tar`。
+2. 导入镜像：Container Station 这类 NAS 界面在「映像」页导入；用命令行的话是 `docker load -i xsx-live-receiver-v1.0.0.tar`。导入后镜像名是 `xsx-live/receiver:latest`。
+3. 取配置文件：下载仓库里的 [`docker-compose.yml`](docker-compose.yml) 和 [`.env.example`](.env.example)（后者改名为 `.env`），按下面「改配置」填好。
+4. 创建应用：NAS 界面里新建应用程序，把 `docker-compose.yml` 的内容贴进去，并把其中的 `./xsx-files` 换成一个绝对路径（例如 `/share/ContainerStation/xsx-live/xsx-files`），数据就不会跟着 compose 文件的位置走。用命令行的话，在这两个文件所在的目录执行 `docker compose up -d`。
+
+### 方式二：从镜像仓库拉取
+
+和方式一一样，只是不用下载和导入镜像包：在 `.env` 里设 `XSX_IMAGE=ghcr.io/<账号>/xsx-live-receiver:<版本>`，然后 `docker compose pull && docker compose up -d`。GitHub 上的镜像默认是私有的：仓库的所有者要先在 GitHub 的 Packages 页面把它改成公开，别人才能拉取；或者先 `docker login ghcr.io`。
+
+### 方式三：本机编译
+
+适合要改代码的情况。点仓库页面上的「Code」按钮复制克隆地址，然后：
 
 ```bash
-git clone https://github.com/<YOUR_USER>/xsx-live.git
+git clone <克隆地址>
 cd xsx-live
-```
-
-复制配置文件并修改：
-
-```bash
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，填入你的 Xbox 局域网 IP 与本机服务 IP（`<YOUR_HOST_IP>` 换成运行这套服务的机器的 IP）：
+按下面「改配置」填好 `.env`，再执行 `docker compose up -d`。第一次会编译接收端，需要几分钟。
+
+### 改配置
+
+三种方式都要做。`.env` 里大多数选项有默认值，通常只要确认这两项：
 
 ```ini
-# Xbox Series X / S 局域网静态 IP
-XBOX_IP=192.168.1.180
-
-# 宿主机绑定 IP (局域网访问设为 0.0.0.0)
-BIND_IP=0.0.0.0
-
-# 管理后台监听端口
-DASHBOARD_BIND=0.0.0.0:8099
-
-# 客户端访问的 HTTP 流媒体基准地址
+# 这台机器的局域网 IP。管理页上的播放地址和拉流地址都用它拼出来；
+# 保持 127.0.0.1 的话，别的设备打开管理页时这些地址是错的
 MEDIA_HTTP_BASE=http://<YOUR_HOST_IP>:8888
 
-# RTMP 流目标地址
-OUTPUT_RTMP=rtmp://127.0.0.1:1935/live/xsx
+# Xbox 主机的局域网 IP。接收端用它判断自己该用哪块网卡和主机通信，
+# 这台机器有多块网卡或者装了虚拟网卡时要填对
+XBOX_IP=192.168.1.180
 ```
 
----
+其余选项需要时再看下文「环境变量说明」。
 
-### 2. 启动服务
+### 启动之后
 
-推荐用 Docker Compose 安装，示例配置就是仓库里的 [`docker-compose.yml`](docker-compose.yml)，地址等参数在 `.env` 里改。不需要提前准备任何文件：数据目录 `xsx-files/`（凭据、运行状态、播放页）会在第一次启动时自动生成，管理页和播放页都打包在镜像里。
-
-三种装法用的都是同一份 `docker-compose.yml`：
-
-| 场景 | 做法 |
-| :--- | :--- |
-| 本机编译 | `docker compose up -d`，第一次会编译接收端，需要几分钟 |
-| 导入镜像包（NAS 上的 Container Station 这类界面） | 在界面里导入 GitHub Actions 产出的 `.tar`，得到镜像 `xsx-live/receiver:latest`，再用 `docker-compose.yml` 创建应用 |
-| 从镜像仓库拉取 | 在 `.env` 里设 `XSX_IMAGE=ghcr.io/<账号>/xsx-live-receiver:<版本>`，然后 `docker compose pull && docker compose up -d` |
-
-在 NAS 界面里创建应用时，把 `docker-compose.yml` 里的 `./xsx-files` 换成一个绝对路径（例如 `/share/ContainerStation/xsx-live/xsx-files`），数据就不会跟着 compose 文件的位置走。
-
-查看运行状态：
+* 不需要提前准备任何文件：数据目录 `xsx-files/`（凭据、运行状态、播放页）会在第一次启动时自动生成，管理页和播放页都打包在镜像里。
+* 打开管理页：`http://<YOUR_HOST_IP>:8099/`
+* 查看运行状态：
 
 ```bash
 docker compose ps
@@ -165,17 +160,17 @@ docker compose logs -f receiver
 
 ---
 
-### 3. 登录 Xbox 账号
+### 登录 Xbox 账号
 
 Xbox 远程串流需要微软账号授权。打开管理页，在「Xbox 账号」面板里点「开始登录」，用 **Xbox 主机上登录的那个账号** 登录并同意授权即可。
 
 浏览器随后会跳到 `http://localhost/?code=...` 并提示“无法访问此网站”，这是正常的：把地址栏里的完整网址复制，粘贴回管理页，点「完成登录」。
 
-凭据保存在 `xsx-files/auth/session.json`，之后由接收端自动续期，只有凭据失效时才需要重新登录。
+凭据保存在 `xsx-files/auth/session.json`，之后由接收端自动续期，只有凭据失效时才需要重新登录。登录后点「开启串流」就会连接主机。
 
 ---
 
-### 4. 自动构建
+### 自动构建
 
 仓库带一个 GitHub Actions 工作流（`.github/workflows/build.yml`）：推送 `v` 开头的标签，或者在 Actions 页面手动运行并填版本号，就会在 GitHub 上跑测试、编译镜像并发布：
 
@@ -253,7 +248,7 @@ Xbox 远程串流需要微软账号授权。打开管理页，在「Xbox 账号�
 
 | 变量名 | 默认值 | 描述 |
 | :--- | :--- | :--- |
-| `XBOX_IP` | `192.168.1.180` | Xbox 主机的局域网 IP 地址 |
+| `XBOX_IP` | `192.168.1.180` | Xbox 主机的局域网 IP。接收端用它判断自己该用哪块网卡和主机通信 |
 | `BIND_IP` | `0.0.0.0` | SRS 端口在宿主机的监听绑定 IP |
 | `DASHBOARD_BIND` | `0.0.0.0:8099` | 管理页面监听 IP 与端口。写成 `0.0.0.0` 即可用本机任意 IP 访问 |
 | `MEDIA_HTTP_BASE`| `http://127.0.0.1:8888` | 客户端访问的 HTTP-FLV/Web 播放器根路径 |

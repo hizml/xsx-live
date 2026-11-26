@@ -104,57 +104,53 @@ The receiver is split into modules by responsibility (`receiver/src/`):
 
 ## 🚀 Quick start
 
-### 1. Clone the repository and prepare the environment
+There are three ways to install. They only differ in where the receiver image comes from. **On a NAS, or if you do not want to compile anything, pick the first one.** Configuration and sign-in afterwards are the same for all three.
 
-Make sure `docker` and `docker compose` are installed:
+### Option 1: import a ready-made image archive (recommended for NAS)
+
+1. Download the archive from the [Releases](../../releases) page of the repository. The file is named like `xsx-live-receiver-v1.0.0.tar.gz`. Decompress it to get the `.tar`.
+2. Import the image: in a NAS UI such as Container Station, use the import function on the "Images" page. On the command line it is `docker load -i xsx-live-receiver-v1.0.0.tar`. The image is named `xsx-live/receiver:latest`.
+3. Get the configuration files: download [`docker-compose.yml`](docker-compose.yml) and [`.env.example`](.env.example) from the repository (rename the latter to `.env`) and fill them in as described below under "Configuration".
+4. Create the application: in a NAS UI, create a new application and paste the contents of `docker-compose.yml`. Replace `./xsx-files` in it with an absolute path (for example `/share/ContainerStation/xsx-live/xsx-files`) so the data does not depend on where the compose file lives. On the command line, run `docker compose up -d` in the directory holding the two files.
+
+### Option 2: pull from a registry
+
+Same as option 1, without downloading and importing an archive: set `XSX_IMAGE=ghcr.io/<account>/xsx-live-receiver:<version>` in `.env`, then `docker compose pull && docker compose up -d`. Images on GitHub are private by default. The repository owner has to make the package public on the GitHub Packages page before others can pull it, or you run `docker login ghcr.io` first.
+
+### Option 3: build locally
+
+For when you want to change the code. Click "Code" on the repository page to copy the clone URL, then:
 
 ```bash
-git clone https://github.com/<YOUR_USER>/xsx-live.git
+git clone <clone URL>
 cd xsx-live
-```
-
-Copy the configuration file:
-
-```bash
 cp .env.example .env
 ```
 
-Edit `.env` with the LAN IP of your Xbox and the IP of the machine running the service (replace `<YOUR_HOST_IP>` with that machine's IP):
+Fill in `.env` as described below under "Configuration", then run `docker compose up -d`. The first run compiles the receiver, which takes a few minutes.
+
+### Configuration
+
+Needed for all three options. Most entries in `.env` have sensible defaults. Usually you only need to check these two:
 
 ```ini
-# LAN static IP of the Xbox Series X / S
-XBOX_IP=192.168.1.180
-
-# Bind IP on the host (0.0.0.0 for LAN access)
-BIND_IP=0.0.0.0
-
-# Dashboard listen address
-DASHBOARD_BIND=0.0.0.0:8099
-
-# Base HTTP URL that clients use for playback
+# LAN IP of this machine. The player and stream addresses on the dashboard are
+# built from it. If it stays 127.0.0.1, those addresses are wrong for other devices
 MEDIA_HTTP_BASE=http://<YOUR_HOST_IP>:8888
 
-# RTMP target
-OUTPUT_RTMP=rtmp://127.0.0.1:1935/live/xsx
+# LAN IP of the Xbox console. The receiver uses it to decide which network interface
+# to talk to the console on. Set it correctly when this machine has several
+# interfaces or virtual adapters
+XBOX_IP=192.168.1.180
 ```
 
----
+See "Environment variables" below for the rest.
 
-### 2. Start the service
+### After it starts
 
-Docker Compose is the recommended way to install. The example configuration is [`docker-compose.yml`](docker-compose.yml) in this repository, and addresses and ports are changed in `.env`. No files need to be prepared beforehand: the data directory `xsx-files/` (credentials, runtime state, player page) is created on first start, and the dashboard and player page are baked into the image.
-
-All three ways of installing use the same `docker-compose.yml`:
-
-| Situation | What to do |
-| :--- | :--- |
-| Build locally | `docker compose up -d`. The first run compiles the receiver, which takes a few minutes. |
-| Import an image archive (NAS web UIs such as Container Station) | Import the `.tar` produced by GitHub Actions in the UI. You get the image `xsx-live/receiver:latest`, then create the application from `docker-compose.yml`. |
-| Pull from a registry | Set `XSX_IMAGE=ghcr.io/<account>/xsx-live-receiver:<version>` in `.env`, then `docker compose pull && docker compose up -d`. |
-
-When you create the application in a NAS UI, replace `./xsx-files` in `docker-compose.yml` with an absolute path (for example `/share/ContainerStation/xsx-live/xsx-files`) so the data does not depend on where the compose file lives.
-
-Check the running state:
+* No files need to be prepared beforehand: the data directory `xsx-files/` (credentials, runtime state, player page) is created on first start, and the dashboard and player page are baked into the image.
+* Open the dashboard: `http://<YOUR_HOST_IP>:8099/`
+* Check the running state:
 
 ```bash
 docker compose ps
@@ -165,17 +161,17 @@ The log is also written to `xsx-files/state/receiver.log`, one line per entry wi
 
 ---
 
-### 3. Sign in to the Xbox account
+### Sign in to the Xbox account
 
 Xbox remote play needs authorization from a Microsoft account. Open the dashboard, click **Sign in** in the Xbox account panel, and sign in **with the account that is signed in on the console**, then consent.
 
 The browser is then taken to `http://localhost/?code=...` and shows "This site can't be reached". That is expected: copy the complete URL from the address bar, paste it back into the dashboard and click **Finish sign-in**.
 
-The credentials are stored in `xsx-files/auth/session.json` and renewed by the receiver. You only sign in again when they have expired.
+The credentials are stored in `xsx-files/auth/session.json` and renewed by the receiver. You only sign in again when they have expired. Click **Start streaming** to connect to the console.
 
 ---
 
-### 4. Automatic builds
+### Automatic builds
 
 The repository has a GitHub Actions workflow (`.github/workflows/build.yml`). Push a tag starting with `v`, or run the workflow manually from the Actions page with a version number, and GitHub runs the tests, builds the image and publishes it:
 
@@ -253,7 +249,7 @@ Add a source in **Douyin Live Companion** or **OBS Studio**:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `XBOX_IP` | `192.168.1.180` | LAN IP address of the Xbox console |
+| `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. The receiver uses it to decide which network interface to talk to the console on. |
 | `BIND_IP` | `0.0.0.0` | Address the SRS ports bind to on the host |
 | `DASHBOARD_BIND` | `0.0.0.0:8099` | Listen address of the dashboard. With `0.0.0.0` the page can be opened through any IP of the machine. |
 | `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | Base URL that clients use for HTTP-FLV and the player page |
