@@ -1,0 +1,157 @@
+# xsx-live：Xbox 串流接收与局域网分发
+# QNAP NAS 专用（Container Station）。装法：不导入镜像包，直接从 GitHub 的镜像仓库（ghcr.io）拉取镜像。
+# 需要 NAS 能访问 ghcr.io。
+#
+# 用法：
+#   1. 把下面标了 TODO 的地方改成自己的（搜索 TODO，共两处：主机地址、镜像地址里的账号）
+#   2. 在「应用程序」页点「创建」，把文件内容贴进去，创建并启动。镜像会在创建时自动拉取
+#
+# 数据目录是 /share/ContainerStation/xsx-live/xsx-files，在 Container Station 的共享文件夹里，
+# 用 File Station 就能直接看到。共享文件夹不在 /share/ContainerStation 下的话，
+# 把文件里两处 xsx-files 的路径改成实际位置。
+
+# 数据目录里有凭据（auth）、运行状态（state）和播放页（www），启动时自动生成，不需要提前放任何文件。
+# 凭据在管理页里登录一次就有（见 README）。
+#
+# 对外端口用的是常见默认值：管理页 8099，HTTP（HTTP-FLV 和播放页）8888，RTMP 1935。
+# 和其他服务冲突时再改，改端口要同时改哪些地方，下面各处都有注释。
+
+services:
+  media:
+    image: ossrs/srs:5
+    container_name: xsx-media
+    restart: unless-stopped
+    # 分发服务的配置写在下面的环境变量里。-e 表示只用环境变量，不需要配置文件
+    command: ["./objs/srs", "-e"]
+    environment:
+      # SRS_ 开头的变量对应分发服务（SRS）配置文件里的设置，规则是 SRS_配置段_配置项。
+      # 这些值都是为低延迟调过的，一般不用改
+      # RTMP 端口（容器内）。接收端往这里推流，直播软件从这里拉 RTMP
+      SRS_LISTEN: "1935"
+      # 以前台进程运行，日志直接输出。容器里必须关掉守护进程模式
+      SRS_DAEMON: "off"
+      # 日志写到控制台（不是文件），用 docker logs 看
+      SRS_SRS_LOG_TANK: console
+      # 日志级别：只记录警告和错误
+      SRS_SRS_LOG_LEVEL: warn
+      # 最多同时接受多少个连接（推流、拉流、接口都算）
+      SRS_MAX_CONNECTIONS: "100"
+      # HTTP 管理接口：接收端通过它查询「现在有没有在出流」，管理页据此显示状态
+      SRS_HTTP_API_ENABLED: "on"
+      SRS_HTTP_API_LISTEN: "1985"
+      # 允许跨域访问这个接口。它只在宿主机本机的 1985 端口开放（见下面的 ports）
+      SRS_HTTP_API_CROSSDOMAIN: "on"
+      # HTTP 服务：对外提供 HTTP-FLV 和播放页的静态文件
+      SRS_HTTP_SERVER_ENABLED: "on"
+      # 容器内的 HTTP 端口，下面 ports 里把它映射到宿主机的 8888
+      SRS_HTTP_SERVER_LISTEN: "8080"
+      # 静态文件根目录。播放页挂在它下面的 xsx 子目录，所以播放页地址是 /xsx/index.html
+      SRS_HTTP_SERVER_DIR: ./objs/nginx/html
+      # 以下是每一路流的默认设置：
+      # 发送数据时不合并小包（关闭 Nagle 算法），降低延迟
+      SRS_VHOST_TCP_NODELAY: "on"
+      # 低延迟模式
+      SRS_VHOST_MIN_LATENCY: "on"
+      # 不缓存关键帧组：延迟更低，代价是新打开的播放页要等到下一个关键帧才有画面（两三秒）
+      SRS_VHOST_PLAY_GOP_CACHE: "off"
+      # 播放缓冲队列的长度（秒）：越小延迟越低，网络有抖动时越容易卡顿
+      SRS_VHOST_PLAY_QUEUE_LENGTH: "1"
+      # 缓冲攒到多少毫秒就开始播放
+      SRS_VHOST_PLAY_MW_LATENCY: "100"
+      # 不把收到的数据攒成一包再处理，来一帧处理一帧
+      SRS_VHOST_PUBLISH_MR: "off"
+      # 把 RTMP 流同时以 HTTP-FLV 提供。/[app]/[stream].flv 在这里就是 /live/xsx.flv
+      SRS_VHOST_HTTP_REMUX_ENABLED: "on"
+      SRS_VHOST_HTTP_REMUX_MOUNT: "/[app]/[stream].flv"
+    volumes:
+      # 播放页的文件由接收端在启动时写进这个目录（数据目录里的 www 子目录）
+      - /share/ContainerStation/xsx-live/xsx-files/www:/usr/local/srs/objs/nginx/html/xsx:ro
+    ports:
+      - "1935:1935"                # RTMP。换端口时，同时改接收端的 OUTPUT_RTMP
+      - "8888:8080"                # HTTP-FLV 与播放页。换端口时，同时改接收端的 MEDIA_HTTP_BASE
+      - "127.0.0.1:1985:1985"      # SRS 管理接口，仅本机可访问；1985 写死在接收端程序里，不能改
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # 接收端：连上 Xbox 收画面，推给分发服务，同时提供管理页
+  receiver:
+    # TODO：把 <账号> 改成仓库所有者的 GitHub 账号。地址就是镜像仓库（ghcr.io）里这个镜像的页面地址。
+    # :latest 表示最新发布的版本，每次有新版本时重建一次应用就会更新
+    image: ghcr.io/<账号>/xsx-live-receiver:latest
+    container_name: xsx-receiver
+    restart: unless-stopped
+    # 由 docker 的 init 进程当 1 号进程，负责回收接收端拉起的 ffmpeg 这类子进程
+    init: true
+    # 直接用宿主机的网络：接收端要和 Xbox 在局域网里直接收发 UDP，也要访问宿主机上的分发服务
+    network_mode: host
+    # 根文件系统只读。能写的只有下面挂进来的数据目录和 /tmp
+    read_only: true
+    # 数据目录里的文件是经 SMB 写入的，属主未必是 root。
+    # 进程已丢弃全部能力，没有 DAC_OVERRIDE 时会读不了凭据、写不了状态
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    # 禁止进程用 setuid 之类的方式提升权限
+    security_opt:
+      - no-new-privileges:true
+    # /tmp 放在内存里，并且不执行其中的文件
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    environment:
+      # TODO：改成 Xbox 主机的局域网 IP。接收端只和这个地址收发音视频，必须填对
+      XBOX_IP: "192.168.1.180"
+      # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好
+      XBOX_AUTH_FILE: /files/auth/session.json
+      # 运行状态目录：串流开关、当前状态和日志都写在这里
+      STATE_DIR: /files/state
+      # 播放页的输出目录，启动时写入。上面分发服务挂载的就是它
+      WWW_DIR: /files/www
+      # 管理页的监听地址：监听在本机所有地址上，用 NAS 的任何一个 IP 都能打开管理页；用域名访问不了。
+      # 换端口就改这里，例如 0.0.0.0:9000
+      DASHBOARD_BIND: "0.0.0.0:8099"
+      # 别的设备访问分发服务（HTTP-FLV 和播放页）用的地址。保持默认即可：管理页会自动用你访问它时所用的 IP
+      # 生成播放和拉流地址。只有上面 media 的 HTTP 端口不是 8888 时，才需要改这里的端口
+      MEDIA_HTTP_BASE: "http://127.0.0.1:8888"
+      # 接收端把流推到哪里，也就是分发服务的 RTMP 地址，要和上面 media 的 RTMP 端口映射保持一致。
+      # 接收端用 host 网络，所以写宿主机上的 127.0.0.1
+      OUTPUT_RTMP: "rtmp://127.0.0.1:1935/live/xsx"
+      # 日志每一行带时间，用北京时间
+      TZ: "Asia/Shanghai"
+      # 手柄保活，平时不往主机发任何手柄包，不占玩家位，不影响主机上的物理手柄。两种情况各动一次虚拟手柄：
+      # 1) 握手后注册手柄、发两帧中立输入再松开，主机不会在 60 秒后以「没有客户端」为由踢掉会话
+      # 2) 约 10 分钟没人碰手柄时主机会发空闲警告、120 秒后踢人。收到警告后照官方客户端的做法把左摇杆
+      #    推到 12.5%、40 毫秒后回中，半分钟后再推一次作为保险。每推一次主机画面会弹一次「正在远程游戏」。
+      #    设为 "0" 关闭第 2 种
+      IDLE_KEEPALIVE: "1"
+      # 管理页「Xbox 账号」登录的两项设置，都可以不填。
+      # XBOX_CLIENT_ID: 自己在微软注册的应用 ID；不填则用内置的（来自开源项目 kite）
+      # AUTH_REDIRECT_URI: 登录后跳回的地址，必须以 https:// 开头并已在自己的应用里登记；
+      #   不填时微软会跳到本机的 localhost，需要在管理页粘贴一次跳转后的网址
+      # XBOX_CLIENT_ID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      # AUTH_REDIRECT_URI: "https://example.com/xsx/auth/callback"
+    volumes:
+      # 数据目录：凭据、状态、播放页都在这里。接收端的日志也写进其中的 state/receiver.log，
+      # 在 File Station 里就能直接看。
+      # 共享文件夹不在 /share/ContainerStation 下的话，这里和上面 media 的 volumes 各改一处，两处要对应
+      - /share/ContainerStation/xsx-live/xsx-files:/files
+    depends_on:
+      # 先起分发服务
+      - media
+    healthcheck:
+      # 接收端定时写状态文件，这个命令检查状态文件是不是还新鲜
+      test: ["CMD", "/usr/local/bin/xsx-native", "--healthcheck"]
+      interval: 20s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    # 停止时最多等 30 秒，让接收端把远程会话收好尾
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
