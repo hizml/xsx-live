@@ -188,6 +188,11 @@ pub async fn start(control: watch::Sender<ControlState>) -> Result<()> {
 // IP 都能打开管理页，但用域名访问不了
 fn request_host(headers: &hyper::HeaderMap, bind: SocketAddr) -> Option<String> {
     let host = headers.get(header::HOST)?.to_str().ok()?;
+    // localhost 是浏览器固定指向本机的名字，攻击者的域名抢不到它，不会被 DNS 重绑定利用，放行方便本机访问
+    if let Some((name, port)) = host.rsplit_once(':')
+        && name.eq_ignore_ascii_case("localhost")
+        && port.parse::<u16>().is_ok_and(|port| port == bind.port())
+    { return Some(host.to_owned()); }
     let addr: SocketAddr = host.parse().ok()?;
     (addr.port() == bind.port()).then(|| host.to_owned())
 }
@@ -542,6 +547,10 @@ mod tests {
         let host = |value: &str| request_host(&headers(&[("host", value)]), bind());
         assert_eq!(host("192.0.2.10:8099").as_deref(), Some("192.0.2.10:8099"));
         assert_eq!(host("127.0.0.1:8099").as_deref(), Some("127.0.0.1:8099"), "本机访问也行");
+        assert_eq!(host("localhost:8099").as_deref(), Some("localhost:8099"), "localhost 放行");
+        assert_eq!(host("LOCALHOST:8099").as_deref(), Some("LOCALHOST:8099"), "大小写都认");
+        assert!(host("localhost:1935").is_none(), "localhost 的端口也要和监听端口一致");
+        assert!(host("localhosta:8099").is_none(), "长得像的不行");
         assert!(host("[::1]:8099").is_some(), "IPv6 字面量也行");
         assert!(host("media.local:8099").is_none(), "域名一律不接受，这是防 DNS 重绑定的关键");
         assert!(host("nas.example.com:8099").is_none());

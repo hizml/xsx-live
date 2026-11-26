@@ -176,7 +176,7 @@ In the NAS files, usually only the place marked `TODO` needs changing:
 
 | Setting | Change it to | Why |
 | :--- | :--- | :--- |
-| `XBOX_IP` | LAN IP of the Xbox console | The receiver exchanges audio and video with this address only, so streaming cannot work if it is wrong. Give the console a static IP. Since 1.0.1 you can try leaving it unset: the receiver then uses the console address returned with the streaming session (experimental, see the FAQ below). |
+| `XBOX_IP` | LAN IP of the Xbox console | The receiver exchanges audio and video with this address only, so it **must be correct** (when unset, the receiver tries an automatic lookup, but on a real console Microsoft does not return the address). Give the console a static IP. |
 
 The rest have working defaults. Two worth knowing about:
 
@@ -221,6 +221,7 @@ The repository has a GitHub Actions workflow (`.github/workflows/build.yml`). Pu
 
 * Image: `ghcr.io/hizml/xsx-live-receiver:<version>` and `:latest`
 * A compressed image archive `xsx-live-receiver-<version>.tar.gz` (attached to the Release for a tag, a build artifact for a manual run). Decompress it before importing.
+* The media server image: the official SRS image copied to `ghcr.io/hizml/xsx-live-media:5` by pinned digest (the official one is on Docker Hub, often unreachable in mainland China).
 
 Build status and the artifacts of each run are on the [Actions](../../actions/workflows/build.yml) page. Tests run first: the unit tests and two end-to-end tests with a real ffmpeg must pass before the image is built. A tag that does not match the version in `receiver/Cargo.toml` fails immediately.
 
@@ -256,7 +257,7 @@ Open the dashboard in a browser:
 * **Start streaming when the console turns on**: streaming stops when the console shuts down. When this is on, it starts again on the next power-on; when off, tap **Start streaming** yourself.
 * **Language**: switch between "中文" and "EN" at the top right of the page. See "Languages" below.
 
-The dashboard only accepts access by IP plus port, for example `http://192.168.1.10:31099/` (on the machine itself, use `http://127.0.0.1:31099/`). Access by hostname returns 403, and `localhost` counts as a hostname too. This defends against DNS rebinding: a site on the public Internet can point its own domain at your LAN IP and let your browser reach the dashboard and its API on its behalf. Accepting IPs only keeps such requests out.
+The dashboard accepts access by IP plus port, or by `localhost` plus port, for example `http://192.168.1.10:31099/`; on the machine itself, `http://localhost:31099/` or `http://127.0.0.1:31099/` works. Other hostnames return 403. This defends against DNS rebinding: a site on the public Internet can point its own domain at your LAN IP and let your browser reach the dashboard and its API on its behalf. `localhost` is always resolved to the machine itself by the browser, so an attacker cannot control it, and it is allowed.
 
 > Controller and keep-alive: the receiver sends no gamepad data in normal operation. During the handshake after power-on it "says hello" to the console once (registers a virtual gamepad, sends two neutral input frames and releases immediately) so the session is not ended for having no client. After about 10 minutes without controller input the console warns about being idle and disconnects 120 seconds later. At that point the receiver nudges the left stick to 12.5% and recenters it after 40 ms (the same thing the official Microsoft web client does), and nudges again half a minute later as a safety net. Each nudge shows "<gamertag> is remote playing" on the console screen. Set `IDLE_KEEPALIVE` to `0` to turn this off, at the cost of being disconnected after a long idle period.
 
@@ -295,7 +296,7 @@ Usually only the entry marked ★ needs changing. Everything else has a working 
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. The receiver exchanges audio and video with this address only, so give the console a static IP. Since 1.0.1 it can be left unset (experimental): the receiver then uses the console address returned with the streaming session, retrying with `CONSOLE_ADDRESS_UNAVAILABLE` when none is available. |
+| ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. **Must be correct.** The receiver exchanges audio and video with this address only, so give the console a static IP. When unset it tries an automatic lookup, but on a real console Microsoft does not return the address (it retries with `CONSOLE_ADDRESS_UNAVAILABLE`). |
 | `BIND_IP` | `0.0.0.0` | Address the SRS ports bind to on the host |
 | `DASHBOARD_BIND` | `0.0.0.0:31099` | Listen address of the dashboard. With `0.0.0.0` the page can be opened through any IP of the machine. |
 | `MEDIA_HTTP_BASE` | `http://127.0.0.1:31888` | Address other devices use to reach the media server. The default works as is (since 1.0.1): the dashboard generates the player and stream addresses from the IP you open it with. Keep the port in line with the media HTTP port (31888 in the example configurations). |
@@ -347,7 +348,7 @@ To go back to an old version, import that version's image archive and recreate a
 
 ## ❓ FAQ
 
-* **The dashboard returns 403**: The dashboard only accepts access by IP, for example `http://192.168.1.10:31099/` (`127.0.0.1` on the machine itself), and the port has to match `DASHBOARD_BIND`. Hostnames, including `localhost`, are rejected. Access by hostname, or with the wrong port, returns 403.
+* **The dashboard returns 403**: The dashboard only accepts access by IP or `localhost`, for example `http://192.168.1.10:31099/`, and the port has to match `DASHBOARD_BIND`. Other hostnames are rejected, as is a mismatched port. Access by hostname, or with the wrong port, returns 403.
 
 * **The status stays on "Waiting for XSX to turn on"**: The receiver never wakes the console. Turn the console on and it connects by itself. The matching reason in the log is `CONSOLE_OFFLINE`.
 
@@ -366,6 +367,7 @@ To go back to an old version, import that version's image archive and recreate a
 * **Streaming stopped when the console shut down**: This is intended: when the console shuts down, the receiver ends the session and leaves the console alone while it powers off. Whether streaming starts again on the next power-on is decided by the "Start streaming when the console turns on" switch in the dashboard.
 
 * **`CONSOLE_ADDRESS_UNAVAILABLE` appears in the log**: `XBOX_IP` is unset and the streaming session did not return a usable console address. Set `XBOX_IP` to the LAN IP of the console in the compose file.
+* **The media image cannot be pulled when creating the application**: the compose files use the copy in this repository's ghcr (`ghcr.io/hizml/xsx-live-media:5`) by default, so Docker Hub is not needed. To use the official address instead, change `image:` back to `ossrs/srs:5` (on Docker Hub; configure a registry mirror if it is unreachable).
 * **How do I tell which version is running?**: Look at the dashboard footer, or at the first line of the log, `VERSION version=…`. See "Version numbers" above.
 
 ---
@@ -403,4 +405,4 @@ Use it on a trusted LAN only, and **do not expose ports 31099, 31888 or 31935 to
 
 ## 📄 License
 
-This project is licensed under the MIT license. The full text is in [LICENSE](LICENSE) at the root of the repository (the same text as `receiver/LICENSE.upstream`, which ships with the receiver code). The protocol reverse engineering and signaling implementation build on excellent community projects such as `DRHATL95/kite` and `unknownskl/xbox-xcloud-player`. Many thanks to their authors. The `mpegts.js` library used by the player page is MIT licensed too and distributed with its license (`www/vendor/LICENSE`).
+This project is licensed under the MIT license. The full text is in [LICENSE](LICENSE) at the root of the repository (the same text as `receiver/LICENSE.upstream`, which ships with the receiver code). The protocol reverse engineering and signaling implementation build on excellent community projects such as `DRHATL95/kite` and `unknownskl/xbox-xcloud-player`. Many thanks to their authors. The `mpegts.js` library used by the player page is MIT licensed too and distributed with its license (`www/vendor/LICENSE`). The media server SRS is MIT licensed as well; the copy in ghcr is the official image reproduced by digest.

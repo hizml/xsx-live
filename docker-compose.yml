@@ -17,9 +17,10 @@
 services:
   # 分发服务：接收端把流推给它，直播软件和播放页从它拉流
   media:
-    # 分发服务（SRS）：开源的流媒体服务器，用的是 SRS 项目在 Docker Hub 上的官方镜像。
-    # 首次创建应用时自动拉取（约 160MB），之后一直用本地这一份，重建不重复下载
-    image: ossrs/srs:5
+    # 分发服务（SRS）：开源的流媒体服务器。镜像用的是本仓库复制到 ghcr.io 的 SRS 官方镜像
+    # （按官方摘要原样复制；官方在 Docker Hub，国内常拉不到）。首次创建应用时自动拉取
+    # （约 160MB），之后一直用本地这一份，重建不重复下载。想改回官方地址就换成 ossrs/srs:5
+    image: ghcr.io/hizml/xsx-live-media:5
     container_name: xsx-media
     restart: unless-stopped
     # 分发服务的配置写在下面的环境变量里。-e 表示只用环境变量，不需要配置文件
@@ -107,9 +108,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
     environment:
-      # Xbox 主机的局域网 IP。接收端只和这个地址收发音视频。不设时（1.0.1 起，试验性）接收端改用
-      # 建立会话时微软返回的主机地址，取不到会以 CONSOLE_ADDRESS_UNAVAILABLE 重试
-      XBOX_IP: "${XBOX_IP:-192.168.1.180}"
+      # Xbox 主机的局域网 IP。接收端只和这个地址收发音视频，必须填对（自动获取实测拿不到地址）
       # 数据目录只挂这一处，下面三项都指向它里面的子目录，启动时自动建好。
       # 微软账号的凭据文件：在管理页里登录后生成，之后由接收端自动续期
       XBOX_AUTH_FILE: /files/auth/session.json

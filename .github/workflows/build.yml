@@ -37,6 +37,25 @@ jobs:
       - run: cargo test --locked
       - run: cargo test --locked -- --ignored
 
+  # 把 SRS 官方镜像按固定摘要复制到本仓库的 ghcr（官方在 Docker Hub，国内常拉不到）。
+  # imagetools 只复制清单，不用下载内容，秒级完成，多架构原样保留
+  mirror:
+    name: 复制 SRS 镜像到 ghcr
+    runs-on: ubuntu-latest
+    env:
+      # ossrs/srs:5 当前指向的清单摘要；升级 SRS 时改这里
+      SRS_DIGEST: sha256:5ed957dbebc48da42e928cebbc9446bced1c5afc58f816e122ce36d370af0113
+      MEDIA_IMAGE: ghcr.io/${{ github.repository_owner }}/xsx-live-media:5
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 按摘要复制（保留多架构）
+        run: docker buildx imagetools create -t "$MEDIA_IMAGE" "ossrs/srs@$SRS_DIGEST"
+
   build:
     name: 编译并打包
     needs: test

@@ -19,9 +19,10 @@
 
 services:
   media:
-    # 分发服务（SRS）：开源的流媒体服务器，用的是 SRS 项目在 Docker Hub 上的官方镜像。
-    # 首次创建应用时自动拉取（约 160MB），之后一直用本地这一份，重建不重复下载
-    image: ossrs/srs:5
+    # 分发服务（SRS）：开源的流媒体服务器。镜像用的是本仓库复制到 ghcr.io 的 SRS 官方镜像
+    # （按官方摘要原样复制；官方在 Docker Hub，国内常拉不到）。首次创建应用时自动拉取
+    # （约 160MB），之后一直用本地这一份，重建不重复下载。想改回官方地址就换成 ossrs/srs:5
+    image: ghcr.io/hizml/xsx-live-media:5
     container_name: xsx-media
     restart: unless-stopped
     # 分发服务的配置写在下面的环境变量里。-e 表示只用环境变量，不需要配置文件
