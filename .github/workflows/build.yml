@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 版本号，用作镜像标签，例如 v8
+        description: 版本号，用作镜像标签，例如 v1.0.0
         required: true
         type: string
   push:

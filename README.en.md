@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-compose-blue.svg)](docker-compose.yml)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](receiver)
+[![Build receiver image](../../actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
 
 **English** | [简体中文](README.md)
 
@@ -78,12 +79,13 @@ sequenceDiagram
     X-->>R: Console is shutting down, the receiver ends the session and waits for power-off
 ```
 
-* **Sign-in**: the dashboard signs in to the Microsoft account with an authorization code and PKCE. The long-lived credentials are stored in `xsx-files/auth/session.json` and renewed by the receiver. Tokens are only exchanged over the Internet and never travel with the audio and video.
-* **Session setup**: the receiver calls the Xbox remote play API (xHome) to create a session, and uses that API to exchange the WebRTC connection parameters (ICE, SDP) with the console. This step goes over the Internet.
-* **Audio and video**: once the connection is up, picture and sound travel directly between the console and the receiver on the LAN, with no public relay. That keeps latency low, uses no Internet bandwidth and needs no graphics card.
-* **Remuxing, not transcoding**: the receiver wraps the incoming H.264 frames into Matroska and hands them to ffmpeg, which writes them into RTMP with `-c:v copy`, without decoding or re-encoding. Only the audio is converted from Opus to AAC, because streaming software generally accepts AAC only.
-* **Distribution**: SRS serves the published stream in three ways at once, so streaming software and browsers can each pick one.
-* **Staying alive**: a remote session follows two rules, described below under "Controller and keep-alive". The receiver does what the official Microsoft client does, and sends no gamepad data in normal operation.
+The key points:
+
+* **Little goes over the Internet**: only sign-in, session setup and small heartbeats while streaming (keeping the session alive, checking the console's power state). The dashboard signs in to the Microsoft account with an authorization code and PKCE. The long-lived credentials are stored in `xsx-files/auth/session.json` and renewed by the receiver. Sessions are set up through the Xbox remote play API (xHome): the receiver creates the session through it and exchanges the WebRTC connection parameters (ICE, SDP) with the console. Once the connection is up, picture and sound travel directly between the console and the receiver on the LAN, with no public relay. That keeps latency low and uses no Internet bandwidth.
+* **Video is not transcoded**: the receiver wraps the incoming H.264 frames into Matroska and hands them to ffmpeg, which writes them into RTMP with `-c:v copy`, without decoding or re-encoding, so no graphics card is needed. Only the audio is converted from Opus to AAC, because streaming software generally accepts AAC only.
+* **The controller is left alone**: the receiver sends no gamepad data. It only acts in two situations: it "says hello" right after connecting, so the session is not ended for having no client, and it nudges the left stick when nobody has touched the controller for about 10 minutes and the console is about to end the session. Details below under "Controller and keep-alive".
+* **Streaming stops by itself when the console shuts down**: the console tells the receiver, the receiver ends the session and waits for the console to power off, without reconnecting to it. Whether streaming starts again on the next power-on is decided by the "Start streaming when the console turns on" switch in the dashboard.
+* **Distribution**: SRS serves the published stream in three ways at once (HTTP-FLV, RTMP and the browser player page), so streaming software and browsers can each pick one.
 
 The receiver is split into modules by responsibility (`receiver/src/`):
 
@@ -186,8 +188,8 @@ Build status and the artifacts of each run are on the Actions page of the reposi
 
 The version lives in `receiver/Cargo.toml` and is compiled into the program. To publish a release:
 
-1. Change `version` in `receiver/Cargo.toml` (for example to `8.1.0`).
-2. Commit, then create and push a tag with the same name: `git tag v8.1.0 && git push origin v8.1.0`.
+1. Change `version` in `receiver/Cargo.toml` (for example to `1.1.0`).
+2. Commit, then create and push a tag with the same name: `git tag v1.1.0 && git push origin v1.1.0`.
 3. GitHub Actions checks that the tag and `version` match, and only then builds and publishes the image and the image archive.
 
 Where to see which version is running:

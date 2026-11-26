@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-compose-blue.svg)](docker-compose.yml)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](receiver)
+[![构建接收端镜像](../../actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
 
 [English](README.en.md) | **简体中文**
 
@@ -78,12 +79,13 @@ sequenceDiagram
     X-->>R: 主机要关机，接收端结束会话，等主机断电
 ```
 
-* **登录**：管理页用授权码加 PKCE 的方式登录微软账号，长期凭据保存在 `xsx-files/auth/session.json`，之后接收端自动续期。凭据只在互联网上换取令牌，不进入音视频传输。
-* **建会话**：接收端调用 Xbox 的远程串流接口（xHome）创建会话，并通过这个接口和主机交换 WebRTC 的连接参数（ICE、SDP）。这一步走互联网。
-* **传音视频**：连接建立后，画面和声音在主机与接收端之间走局域网直连，不经过公网中继，所以延迟低、不占外网带宽，也不需要显卡。
-* **转封装而不是转码**：接收端把收到的 H.264 视频帧原样封装成 Matroska 交给 ffmpeg，ffmpeg 用 `-c:v copy` 直接写进 RTMP，不解码也不重编码；只有音频从 Opus 转成 AAC，因为直播软件普遍只认 AAC。
-* **分发**：SRS 收到推流后同时提供三种拉流方式，直播软件和浏览器各取所需。
-* **保活**：远程会话有两条规则，见下文「手柄与保活」。接收端按微软官方客户端的做法处理，平时不发送任何手柄数据。
+几个要点：
+
+* **联网的很少**：互联网上只走登录、建会话，以及串流期间很小的心跳（给会话续命、查主机电源状态）。管理页用授权码加 PKCE 的方式登录微软账号，长期凭据保存在 `xsx-files/auth/session.json`，之后接收端自动续期。建会话靠 Xbox 的远程串流接口（xHome）：接收端通过它创建会话，并和主机交换 WebRTC 的连接参数（ICE、SDP）。连接建好后，画面和声音在主机与接收端之间走局域网直连，不经过公网中继，所以延迟低，也不占外网带宽。
+* **视频不转码**：接收端把收到的 H.264 视频帧原样封装成 Matroska 交给 ffmpeg，ffmpeg 用 `-c:v copy` 直接写进 RTMP，不解码也不重编码，所以不需要显卡。只有音频从 Opus 转成 AAC，因为直播软件普遍只认 AAC。
+* **平时不碰手柄**：接收端不发任何手柄数据。只有两种情况会动一下：刚连上时「打个招呼」，免得被当成没有客户端踢掉；约 10 分钟没人碰手柄、主机要踢人时，轻推一下左摇杆。细节见下文「手柄与保活」。
+* **关机会让串流自己停**：主机关机时会通知接收端，接收端结束会话并等主机彻底断电，不会把它重新连住。之后开不自动开始，由管理页的「开机自动串流」开关决定。
+* **分发**：SRS 收到推流后同时提供三种拉流方式（HTTP-FLV、RTMP、浏览器播放页），直播软件和浏览器各取所需。
 
 接收端的代码按职责分成几个模块（`receiver/src/`）：
 
@@ -186,8 +188,8 @@ Xbox 远程串流需要微软账号授权。打开管理页，在「Xbox 账号�
 
 版本号写在 `receiver/Cargo.toml` 里，编进程序。发布一版的步骤：
 
-1. 改 `receiver/Cargo.toml` 里的 `version`（例如 `8.1.0`）。
-2. 提交后打同名的标签并推送：`git tag v8.1.0 && git push origin v8.1.0`。
+1. 改 `receiver/Cargo.toml` 里的 `version`（例如 `1.1.0`）。
+2. 提交后打同名的标签并推送：`git tag v1.1.0 && git push origin v1.1.0`。
 3. GitHub Actions 会检查标签和 `version` 是否一致，一致才编译、发布镜像和镜像包。
 
 在哪里能看到当前跑的是哪一版：
