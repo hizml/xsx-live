@@ -338,8 +338,8 @@ xsx-files/
 
 数据都在 `xsx-files/` 里，换版本不会动它，登录和开关设置都保留。
 
-1. 拿到新版本的镜像：从 Releases 下载并导入新的镜像包，或者 `docker compose pull`。
-2. 重建应用：Container Station 里对应用程序点「重建」；命令行在 compose 文件所在目录执行 `docker compose up -d`。
+1. 拿到新版本的镜像。拉取版 compose（`*-pull.yml`）带了 `pull_policy: always`，直接重建应用就会拉取新版本；命令行下执行 `docker compose pull`。导入镜像包的方式要注意：NAS 的「重建」默认**不会**重新拉取或识别新导入的同名镜像，先在「映像」页删掉旧的 `xsx-live/receiver` 再导入新的并重建。
+2. 重建应用：Container Station 里对应用程序点「重建」（或编辑后重新套用）；命令行在 compose 文件所在目录执行 `docker compose up -d`。
 3. 打开管理页，页脚显示新的版本号就是换好了。显示「版本过旧」说明还在用旧镜像。
 
 想退回旧版本，导入旧版本的镜像包再重建一次即可，数据目录不用动。

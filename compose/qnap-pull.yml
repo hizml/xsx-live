@@ -85,6 +85,8 @@ services:
     # 从 GitHub 的镜像仓库（ghcr.io）拉取本仓库发布的镜像。:latest 表示最新发布的版本，
     # 每次有新版本时重建一次应用就会更新
     image: ghcr.io/hizml/xsx-live-receiver:latest
+    # 有些 NAS 的「重建」默认不会重新拉取已有标签的镜像，这里强制每次重建都拉最新的
+    pull_policy: always
     container_name: xsx-receiver
     restart: unless-stopped
     # 由 docker 的 init 进程当 1 号进程，负责回收接收端拉起的 ffmpeg 这类子进程

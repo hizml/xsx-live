@@ -338,8 +338,8 @@ For a backup or a migration, `auth/` and `state/control.json` are enough: the fi
 
 All data lives in `xsx-files/`. Moving to a new version does not touch it, so the sign-in and the switch settings are kept.
 
-1. Get the new image: download and import the new image archive from Releases, or run `docker compose pull`.
-2. Recreate the application: in Container Station, use "Rebuild" on the application. On the command line, run `docker compose up -d` in the directory holding the compose file.
+1. Get the new image. The pull-variant compose files (`*-pull.yml`) carry `pull_policy: always`, so recreating the application pulls the new version by itself. On the command line, run `docker compose pull`. With the imported-archive method, note that "Rebuild" on a NAS does **not** pick up a newly imported image with the same name by default: delete the old `xsx-live/receiver` on the "Images" page first, then import the new one and rebuild.
+2. Recreate the application: use "Rebuild" on it in Container Station (or edit and apply again). On the command line, run `docker compose up -d` in the directory holding the compose file.
 3. Open the dashboard. The footer showing the new version number means it worked. "Too old to report a version" means the old image is still in use.
 
 To go back to an old version, import that version's image archive and recreate again. The data directory stays as it is.
