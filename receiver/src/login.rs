@@ -1,7 +1,6 @@
 // 管理页里的 Xbox 账号登录：OAuth 授权码加 PKCE，做法与上游 kite 一致。
 // 令牌只写入凭据文件，不进入日志和接口响应。
 use crate::auth::XboxAuth;
-use crate::error::{Result, XboxError};
 use base64::Engine;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -150,13 +149,14 @@ impl LoginAttempt {
     }
 
     /// 用授权码换取长期令牌并写入凭据文件
-    pub async fn complete(&self, code: &str) -> Result<()> {
-        let refresh_token = self.exchange(code).await?;
-        XboxAuth::new().store_session(&self.client_id, &refresh_token, SCOPE).await
+    pub async fn complete(&self, code: &str) -> std::result::Result<(), LoginFailure> {
+        let refresh_token = self.exchange(code).await.map_err(LoginFailure::Exchange)?;
+        XboxAuth::new().store_session(&self.client_id, &refresh_token, SCOPE).await.map_err(|e| LoginFailure::Store(e.to_string()))
     }
 
-    async fn exchange(&self, code: &str) -> Result<String> {
-        let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).redirect(reqwest::redirect::Policy::none()).build()?;
+    async fn exchange(&self, code: &str) -> std::result::Result<String, ExchangeFailure> {
+        let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).redirect(reqwest::redirect::Policy::none()).build()
+            .map_err(unreachable_exchange)?;
         let form = [
             ("client_id", self.client_id.as_str()),
             ("grant_type", "authorization_code"),
@@ -165,33 +165,65 @@ impl LoginAttempt {
             ("code_verifier", self.verifier.as_str()),
             ("scope", SCOPE),
         ];
-        let response = client.post(TOKEN_URL).form(&form).send().await?;
-        let status = response.status();
+        let response = client.post(TOKEN_URL).form(&form).send().await.map_err(unreachable_exchange)?;
+        let status = response.status().as_u16();
         let body: Value = response.json().await.unwrap_or(Value::Null);
-        let refresh_token = body.get("refresh_token").and_then(Value::as_str).filter(|token| !token.is_empty());
-        match refresh_token {
-            Some(token) => Ok(token.to_owned()),
-            None => {
-                let code = body.get("error").and_then(Value::as_str).unwrap_or("missing_refresh_token").to_owned();
-                // 微软的错误描述里写着具体原因（例如跳回地址不匹配的 AADSTS50011），只用于排查，不含令牌
-                let description = body.get("error_description").and_then(Value::as_str).unwrap_or("")
-                    .lines().next().unwrap_or("").chars().take(200).collect::<String>();
-                Err(XboxError::AuthError(describe_exchange_failure(status.as_u16(), &code, &description)))
-            }
+        take_refresh_token(status, &body)
+    }
+}
+
+/// 页面用哪种语言：按浏览器的 Accept-Language 选
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lang { Zh, En }
+
+impl Lang {
+    // 没带 Accept-Language 时按中文；带了就看排第一的语言是不是中文，不是的一律按英文
+    pub fn from_accept_language(value: Option<&str>) -> Self {
+        let Some(value) = value else { return Self::Zh };
+        let first = value.split(',').next().unwrap_or("").trim().to_ascii_lowercase();
+        if first.starts_with("zh") { Self::Zh } else { Self::En }
+    }
+}
+
+/// 向微软换取凭据失败的原因。code 是归好类的标识（管理页按它给出当前语言的说明），
+/// detail 是微软返回的状态码和错误码，只用于排查
+#[derive(Debug, Clone)]
+pub struct ExchangeFailure { pub code: &'static str, pub detail: String }
+
+// 微软的回应里有长期令牌就算成功；没有的话把原因归类后报告失败
+fn take_refresh_token(status: u16, body: &Value) -> std::result::Result<String, ExchangeFailure> {
+    let token = body.get("refresh_token").and_then(Value::as_str).filter(|token| !token.is_empty());
+    if let Some(token) = token { return Ok(token.to_owned()); }
+    let code = body.get("error").and_then(Value::as_str).unwrap_or("missing_refresh_token");
+    // 微软的错误描述里写着具体原因（例如跳回地址不匹配的 AADSTS50011），只用来归类，不往外发
+    let description = body.get("error_description").and_then(Value::as_str).unwrap_or("");
+    Err(describe_exchange_failure(status, code, description))
+}
+
+// 没拿到微软的回应（网络不通、回应不是 JSON 等）
+fn unreachable_exchange(error: reqwest::Error) -> ExchangeFailure {
+    ExchangeFailure { code: "exchange_error", detail: error.to_string().chars().take(200).collect() }
+}
+
+/// 登录失败：换取凭据那一步的失败带归好类的标识，写入凭据文件失败的只有原始错误
+#[derive(Debug, Clone)]
+pub enum LoginFailure { Exchange(ExchangeFailure), Store(String) }
+
+impl std::fmt::Display for LoginFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exchange(failure) => write!(f, "{}: {}", failure.code, failure.detail),
+            Self::Store(error) => write!(f, "store_failed: {error}"),
         }
     }
 }
 
-// 把微软的错误码翻成能直接看懂的提示，原始码附在后面便于排查
-fn describe_exchange_failure(status: u16, code: &str, description: &str) -> String {
-    let hint = match code {
-        "invalid_grant" => "授权码无效或已过期，请重新开始登录",
-        "invalid_client" => "应用 ID 无效，请检查 XBOX_CLIENT_ID",
-        "missing_refresh_token" => "微软没有返回长期令牌",
-        _ if description.contains("AADSTS50011") => "跳回地址与应用里登记的不一致，请检查 AUTH_REDIRECT_URI",
-        _ => "微软拒绝了这次登录",
-    };
-    format!("{hint}（{status} code={code}）")
+// 把微软的错误码归到上面几类里，原始的状态码和错误码留在 detail 里便于排查
+fn describe_exchange_failure(status: u16, code: &str, description: &str) -> ExchangeFailure {
+    const KINDS: [(&str, &str); 3] = [("invalid_grant", "invalid_grant"), ("invalid_client", "invalid_client"), ("missing_refresh_token", "no_refresh_token")];
+    let kind = KINDS.iter().find(|(name, _)| *name == code).map(|(_, kind)| *kind)
+        .unwrap_or(if description.contains("AADSTS50011") { "redirect_mismatch" } else { "rejected" });
+    ExchangeFailure { code: kind, detail: format!("{status} code={code}") }
 }
 
 #[cfg(test)]
@@ -266,14 +298,26 @@ mod tests {
     }
 
     #[test]
-    fn exchange_failures_are_explained() {
+    fn exchange_failures_are_classified() {
         let expired = describe_exchange_failure(400, "invalid_grant", "AADSTS70000: The provided value for the 'code' parameter is not valid.");
-        assert!(expired.starts_with("授权码无效或已过期"), "{expired}");
-        assert!(expired.ends_with("（400 code=invalid_grant）"), "{expired}");
+        assert_eq!((expired.code, expired.detail.as_str()), ("invalid_grant", "400 code=invalid_grant"));
         let mismatch = describe_exchange_failure(200, "invalid_request", "AADSTS50011: The redirect URI specified in the request does not match");
-        assert!(mismatch.contains("AUTH_REDIRECT_URI"), "{mismatch}");
-        assert!(describe_exchange_failure(400, "unauthorized_client", "").starts_with("微软拒绝了这次登录"));
-        assert!(describe_exchange_failure(200, "missing_refresh_token", "").starts_with("微软没有返回长期令牌"));
-        assert!(describe_exchange_failure(500, "server_error", "something broke").starts_with("微软拒绝了这次登录"));
+        assert_eq!(mismatch.code, "redirect_mismatch");
+        assert_eq!(describe_exchange_failure(400, "unauthorized_client", "").code, "rejected");
+        assert_eq!(describe_exchange_failure(200, "missing_refresh_token", "").code, "no_refresh_token");
+        assert_eq!(describe_exchange_failure(500, "server_error", "something broke").code, "rejected");
+        // 各类失败的标识都有对应的说明文字，由 dashboard 的测试逐个核对
+        for kind in ["invalid_grant", "redirect_mismatch", "rejected", "no_refresh_token"] {
+            let failure = LoginFailure::Exchange(ExchangeFailure { code: kind, detail: "400 code=x".to_owned() });
+            assert_eq!(failure.to_string(), format!("{kind}: 400 code=x"));
+        }
+    }
+
+    #[test]
+    fn page_language_follows_the_browser() {
+        assert_eq!(Lang::from_accept_language(None), Lang::Zh, "没带语言时按中文");
+        assert_eq!(Lang::from_accept_language(Some("zh-CN,zh;q=0.9,en;q=0.8")), Lang::Zh);
+        assert_eq!(Lang::from_accept_language(Some("en-US,en;q=0.9")), Lang::En);
+        assert_eq!(Lang::from_accept_language(Some("ja-JP,ja;q=0.9")), Lang::En, "其他语言退回英文");
     }
 }

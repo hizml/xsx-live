@@ -14,16 +14,24 @@ video{width:100%;height:100%;object-fit:contain}
 'use strict';
 // 控制条停下多少毫秒后隐藏；画面停住多少毫秒后重连
 const CONTROLS_VISIBLE_MS=2500,STALL_MS=12000,RECONNECT_DELAY_MS=2000,POLL_MS=2000;
-const SOUND_LABELS={muted:'声音 关',on:'声音 开'};
+// 页面上的文字按语言给：网址里带 ?lang= 就用它（管理页打开时会带上），否则看浏览器自己的语言
+const TEXT={
+ zh:{title:'XSX 局域网直播画面',connecting:'正在连接 XSX…',reconnecting:'等待 XSX 画面，正在重连…',unsupported:'当前浏览器不支持 MSE 网络视频',soundOff:'声音 关',soundOn:'声音 开',fullscreen:'全屏'},
+ en:{title:'XSX LAN live video',connecting:'Connecting to XSX…',reconnecting:'Waiting for XSX video, reconnecting…',unsupported:'This browser does not support MSE video',soundOff:'Sound off',soundOn:'Sound on',fullscreen:'Fullscreen'}
+};
+const wantedLang=new URLSearchParams(location.search).get('lang');
+const lang=wantedLang==='zh'||wantedLang==='en'?wantedLang:(navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en';
+const text=key=>TEXT[lang][key];
+document.documentElement.lang=lang==='zh'?'zh-CN':'en';document.title=text('title');
 const video=document.getElementById('video'),status=document.getElementById('status'),sound=document.getElementById('sound'),fullscreen=document.getElementById('fullscreen'),controls=document.getElementById('controls');
 let player=null,retry=null,lastTime=-1,lastProgress=Date.now(),controlsTimer=null;
 // 默认静音；网址带 ?audio=1 时才一打开就带声音（直播软件里的浏览器来源用得上），
 // 被浏览器拦下的话仍会退回静音
 video.muted=new URLSearchParams(location.search).get('audio')!=='1';
 function dispose(){if(player){try{player.unload();player.detachMediaElement();player.destroy();}catch(e){}player=null;}}
-function reconnect(){if(retry)return;status.textContent='等待 XSX 画面，正在重连…';status.hidden=false;dispose();retry=setTimeout(()=>{retry=null;connect();},RECONNECT_DELAY_MS);}
+function reconnect(){if(retry)return;status.textContent=text('reconnecting');status.hidden=false;dispose();retry=setTimeout(()=>{retry=null;connect();},RECONNECT_DELAY_MS);}
 // 按钮上如实显示当前是开是关
-function renderSound(){sound.textContent=video.muted?SOUND_LABELS.muted:SOUND_LABELS.on;sound.setAttribute('aria-pressed',String(!video.muted));}
+function renderSound(){sound.textContent=text(video.muted?'soundOff':'soundOn');sound.setAttribute('aria-pressed',String(!video.muted));}
 // 浏览器一般不允许一打开就带声音播放；被拦下就先静音播放，等用户点按钮
 // 只有浏览器拒绝自动带声音播放时才退回静音；别的原因（比如还没有画面）保持用户的选择
 function isAutoplayBlocked(error){return Boolean(error)&&error.name==='NotAllowedError';}
@@ -34,7 +42,7 @@ function toggleSound(){
  video.play().catch((error)=>{if(isAutoplayBlocked(error)){video.muted=true;renderSound();video.play().catch(()=>{});}});
 }
 function connect(){
- if(!window.mpegts||!mpegts.getFeatureList().mseLivePlayback){status.textContent='当前浏览器不支持 MSE 网络视频';return;}
+ if(!window.mpegts||!mpegts.getFeatureList().mseLivePlayback){status.textContent=text('unsupported');return;}
  dispose();lastProgress=Date.now();lastTime=-1;
  player=mpegts.createPlayer({type:'flv',url:location.origin+'/live/xsx.flv',isLive:true,hasAudio:true,hasVideo:true},{enableWorker:true,enableStashBuffer:false,lazyLoad:false,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:1.5,liveBufferLatencyMinRemain:0.5,autoCleanupSourceBuffer:true});
  player.on(mpegts.Events.ERROR,()=>reconnect());player.attachMediaElement(video);player.load();play();
@@ -56,5 +64,5 @@ setInterval(()=>{
  if(video.currentTime!==lastTime){lastTime=video.currentTime;lastProgress=Date.now();}else if(Date.now()-lastProgress>STALL_MS){reconnect();}
 },POLL_MS);
 window.addEventListener('beforeunload',()=>{clearTimeout(retry);dispose();});
-renderSound();revealControls();connect();
+fullscreen.textContent=text('fullscreen');renderSound();revealControls();connect();
 </script></body></html>
