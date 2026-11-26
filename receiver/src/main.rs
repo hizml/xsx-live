@@ -58,8 +58,9 @@ impl PadPulse{
  // 握手完成后打个招呼：发两帧中立输入再松开
  fn hello(&mut self){self.neutral=HELLO_FRAMES;self.release=true;}
  fn on_idle_warning(&mut self,rtc:&mut Rtc,control:Option<ChannelId>){
-  self.warned_at=Some(tokio::time::Instant::now());
-  // 主机会在几秒内连着发好几次警告。距上一次微脉冲不满 30 秒就不再推：120 秒内有一次活动就够，
+  // 一轮只按第一次警告计时：主机会在几秒内连发几次警告，每次都重置起点会把第二次微脉冲放进窗口
+  if self.warned_at.is_none(){self.warned_at=Some(tokio::time::Instant::now());}
+  // 距上一次微脉冲不满 30 秒就不再推：120 秒内有一次活动就够，
   // 而频繁推摇杆会干扰主机上正在玩的人。之后的重复交给 in_warning_window
   if self.last.is_some_and(|t|t.elapsed()<IDLE_REPEAT){return;}
   self.reengage(rtc,control);
@@ -492,10 +493,15 @@ mod tests {
  #[tokio::test(start_paused=true)]
  async fn pulses_once_per_warning_round(){
   let mut pad=PadPulse::default();let mut rtc=Rtc::new(Instant::now());
+  // 主机会在几秒内连发几次警告，一轮里只有第一次才立计时起点
+  pad.on_idle_warning(&mut rtc,None);
+  tokio::time::advance(Duration::from_secs(1)).await;
+  pad.on_idle_warning(&mut rtc,None);
+  tokio::time::advance(Duration::from_secs(1)).await;
   pad.on_idle_warning(&mut rtc,None);
   assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None,PadStep::Pulse,PadStep::None,PadStep::None]);
   assert!(!pad.release);
-  // 同一轮里过了重复间隔也不再推：窗口已经结束，收手
+  // 过了重复间隔也不再有第二次：窗口按第一次警告算，已经结束
   tokio::time::advance(Duration::from_secs(31)).await;
   assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None;ACTION_TICKS]);
   assert_eq!(pad.warned_at,None,"窗口已结束");
@@ -520,9 +526,10 @@ mod tests {
   tokio::time::advance(Duration::from_secs(2)).await;
   pad.on_idle_warning(&mut rtc,None);pad.on_idle_warning(&mut rtc,None);
   assert_eq!(advance(&mut pad,3),vec![PadStep::None,PadStep::None,PadStep::None]);
-  // 满 30 秒后窗口还没结束，照常再推一次
+  // 满 30 秒后这一轮已经结束：每轮只推一次，不再推
   tokio::time::advance(Duration::from_secs(29)).await;
-  assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None,PadStep::None,PadStep::Pulse,PadStep::None]);
+  assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None;ACTION_TICKS]);
+  assert_eq!(pad.warned_at,None);
  }
  #[test]
  fn inbound_messages_are_grouped_by_type_and_target(){
