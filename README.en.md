@@ -18,7 +18,7 @@
 
 * **🚀 Zero video transcoding (stream copy)**: the H.264 video frames from the Xbox are remuxed as is, without decoding or re-encoding. **No quality loss and no GPU needed.** Only the audio is converted from Opus to AAC.
 * **⚡ Lightweight**: the receiver is written in Rust (on the `str0m` WebRTC stack) and the media server is SRS 5. About 10 MB of memory at idle. While streaming, the load depends on the machine. The reference figures given by the original project are about 40 MB of memory and 15% of one CPU core.
-* **🎛️ Web dashboard**: start and stop streaming, reconnect, live frame rate and bitrate, muted preview. Default address `http://<YOUR_HOST_IP>:8099/`.
+* **🎛️ Web dashboard**: start and stop streaming, reconnect, live frame rate and bitrate, muted preview. Address in the example configurations: `http://<YOUR_HOST_IP>:31099/`.
 * **🎬 Several ways to pull the stream**: HTTP-FLV, RTMP, and a browser player page with a bundled `mpegts.js`.
 * **🔒 Audio and video stay on the LAN**: only sign-in, session setup and heartbeats use the Internet. Audio and video travel directly between the console and the receiver, with no public relay.
 * **🎮 Leaves the controller alone**: the receiver sends no gamepad data in normal operation, so the physical controller is unaffected. It only registers a virtual gamepad once when connecting, and nudges the stick when there has been no input for a long time and the console is about to end the session.
@@ -39,8 +39,8 @@ The following terms are used throughout this document:
 | Compose file | A YAML file describing which containers to start and how each is configured: the general `docker-compose.yml`, or the ready-made files per NAS brand in [`compose/`](compose) |
 | Receiver | The program that connects to the Xbox, receives audio and video and publishes it to the media server. It also serves the dashboard |
 | Media server | The service that takes the published stream and offers it to streaming software and the player page. It uses SRS |
-| Dashboard | The web page for starting and stopping streaming, signing in and checking the status. Default address `http://<YOUR_HOST_IP>:8099/` |
-| Player page | The web page for watching the picture in a browser. Default address `http://<YOUR_HOST_IP>:8888/xsx/index.html` |
+| Dashboard | The web page for starting and stopping streaming, signing in and checking the status. Address in the example configurations: `http://<YOUR_HOST_IP>:31099/` |
+| Player page | The web page for watching the picture in a browser. Address in the example configurations: `http://<YOUR_HOST_IP>:31888/xsx/index.html` |
 | Publish / pull | Publishing is sending out an audio and video stream. Pulling is receiving it. The receiver publishes. Streaming software and the player page pull |
 | RTMP / HTTP-FLV | Two streaming transport protocols. Streaming software usually supports at least one of them |
 | Transcoding / remuxing | Transcoding encodes the picture again. It costs CPU and can lose quality. Remuxing only changes the container format and does not encode again |
@@ -69,9 +69,9 @@ flowchart LR
     subgraph LAN[LAN]
         X[Xbox Series X / S<br/>WebRTC server: H.264 video + Opus audio]
         subgraph HOST[Machine running this service]
-            R[xsx-receiver<br/>receiver + dashboard :8099]
+            R[xsx-receiver<br/>receiver + dashboard :31099]
             F[ffmpeg<br/>video passthrough, audio to AAC]
-            S[xsx-media (SRS 5)<br/>RTMP :1935, HTTP-FLV :8888]
+            S[xsx-media (SRS 5)<br/>RTMP :31935, HTTP-FLV :31888]
         end
         C[OBS / Live Companion / browser player]
     end
@@ -146,7 +146,7 @@ The [`compose/`](compose) directory holds ready-made compose files per NAS brand
 2. **Import the image and create the application**, depending on your NAS brand:
    * **QNAP (Container Station)**: copy [`compose/qnap.yml`](compose/qnap.yml). On "Images", click "Import" and pick the `.tar`. Change the place marked `TODO` in the file (only the console address). On "Applications", click "Create", paste the file, then create and start.
    * **Synology (Container Manager, DSM 7.2 and above)**: copy [`compose/synology.yml`](compose/synology.yml). On "Image", click "Add" and choose "Add from file", then pick the `.tar`. On "Project", click "Create", choose a folder for the data, pick "Create docker-compose.yml", paste the edited file, and go through the wizard to the end.
-3. **Sign in and start**. Open `http://<IP of the NAS>:8099/` in a browser, sign in under "Xbox account" (see "Sign in to the Xbox account" below), then click **Start streaming**.
+3. **Sign in and start**. Open `http://<IP of the NAS>:31099/` in a browser, sign in under "Xbox account" (see "Sign in to the Xbox account" below), then click **Start streaming**.
 
 ### Option B: pull from a registry
 
@@ -180,7 +180,7 @@ In the NAS files, usually only the place marked `TODO` needs changing:
 
 The rest have working defaults. Two worth knowing about:
 
-* `MEDIA_HTTP_BASE`: the default `http://127.0.0.1:8888` works as is (since 1.0.1). The dashboard generates the player and stream addresses from the IP you open it with. Only change the port here if the media HTTP port is not 8888.
+* `MEDIA_HTTP_BASE`: the default `http://127.0.0.1:31888` works as is (since 1.0.1). The dashboard generates the player and stream addresses from the IP you open it with. Keep the port in line with the media HTTP port (31888 in the example configurations).
 * Ports, the time zone and the other options are described under "Environment variables" below, and every one also has a comment in the compose file.
 
 ### After it starts
@@ -245,7 +245,7 @@ Where to see which version is running:
 ## 🖥️ Dashboard and usage
 
 Open the dashboard in a browser:
-`http://<YOUR_HOST_IP>:8099/`
+`http://<YOUR_HOST_IP>:31099/`
 
 * **Start streaming**: connect to an Xbox that is turned on, receive the picture and push it to the media server.
 * **Stop streaming**: end the current session, stop the local publish and pause automatic reconnects.
@@ -256,7 +256,7 @@ Open the dashboard in a browser:
 * **Start streaming when the console turns on**: streaming stops when the console shuts down. When this is on, it starts again on the next power-on; when off, tap **Start streaming** yourself.
 * **Language**: switch between "中文" and "EN" at the top right of the page. See "Languages" below.
 
-The dashboard only accepts access by IP (for example `http://192.168.1.10:8099/`). Access by hostname returns 403. This prevents another site from pointing its own domain at this machine and impersonating the dashboard.
+The dashboard only accepts access by IP (for example `http://192.168.1.10:31099/`). Access by hostname returns 403. This prevents another site from pointing its own domain at this machine and impersonating the dashboard.
 
 > Controller and keep-alive: the receiver sends no gamepad data in normal operation. During the handshake after power-on it "says hello" to the console once (registers a virtual gamepad, sends two neutral input frames and releases immediately) so the session is not ended for having no client. After about 10 minutes without controller input the console warns about being idle and disconnects 120 seconds later. At that point the receiver nudges the left stick to 12.5% and recenters it after 40 ms (the same thing the official Microsoft web client does), and nudges again half a minute later as a safety net. Each nudge shows "<gamertag> is remote playing" on the console screen. Set `IDLE_KEEPALIVE` to `0` to turn this off, at the cost of being disconnected after a long idle period.
 
@@ -266,7 +266,7 @@ The dashboard only accepts access by IP (for example `http://192.168.1.10:8099/`
 
 The dashboard and the player page are available in Chinese and English.
 
-* **Dashboard**: switch between "中文" and "EN" at the top right of the page. The language is decided in this order: `?lang=en` or `?lang=zh` in the URL (for example `http://<YOUR_HOST_IP>:8099/?lang=en`), the language last picked in this browser, then the browser's own language (anything other than Chinese gets English). API errors carry a fixed code, and the page translates the code into the current language.
+* **Dashboard**: switch between "中文" and "EN" at the top right of the page. The language is decided in this order: `?lang=en` or `?lang=zh` in the URL (for example `http://<YOUR_HOST_IP>:31099/?lang=en`), the language last picked in this browser, then the browser's own language (anything other than Chinese gets English). API errors carry a fixed code, and the page translates the code into the current language.
 * **Player page**: follows the browser language. `?lang=` can force it, and the dashboard passes its current language when it opens the player page.
 * **Sign-in redirect page**: follows the browser language.
 
@@ -279,13 +279,13 @@ To add a third language, change the three text tables: `dashboard/i18n.js` (dash
 Add a source in **Douyin Live Companion** or **OBS Studio**:
 
 1. **Option 1: browser source (recommended)**
-   * URL: `http://<YOUR_HOST_IP>:8888/xsx/index.html`
+   * URL: `http://<YOUR_HOST_IP>:31888/xsx/index.html`
    * Resolution: `1920x1080` or `2560x1440` (16:9)
    * Enable "Control audio via OBS" (or the equivalent) to capture game audio. The player page starts muted. To start with sound, add `?audio=1` to the URL.
 2. **Option 2: media source / HTTP-FLV**
-   * URL: `http://<YOUR_HOST_IP>:8888/live/xsx.flv`
+   * URL: `http://<YOUR_HOST_IP>:31888/live/xsx.flv`
 3. **Option 3: RTMP pull**
-   * URL: `rtmp://<YOUR_HOST_IP>:1935/live/xsx`
+   * URL: `rtmp://<YOUR_HOST_IP>:31935/live/xsx`
 
 ---
 
@@ -297,9 +297,9 @@ Usually only the entry marked ★ needs changing. Everything else has a working 
 | :--- | :--- | :--- |
 | ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. The receiver exchanges audio and video with this address only, so give the console a static IP. Since 1.0.1 it can be left unset (experimental): the receiver then uses the console address returned with the streaming session, retrying with `CONSOLE_ADDRESS_UNAVAILABLE` when none is available. |
 | `BIND_IP` | `0.0.0.0` | Address the SRS ports bind to on the host |
-| `DASHBOARD_BIND` | `0.0.0.0:8099` | Listen address of the dashboard. With `0.0.0.0` the page can be opened through any IP of the machine. |
-| `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | Address other devices use to reach the media server. The default works as is (since 1.0.1): the dashboard generates the player and stream addresses from the IP you open it with. Only change the port here if the media HTTP port is not 8888. |
-| `OUTPUT_RTMP` | `rtmp://127.0.0.1:1935/live/xsx` | RTMP target that the receiver publishes to |
+| `DASHBOARD_BIND` | `0.0.0.0:31099` | Listen address of the dashboard. With `0.0.0.0` the page can be opened through any IP of the machine. |
+| `MEDIA_HTTP_BASE` | `http://127.0.0.1:31888` | Address other devices use to reach the media server. The default works as is (since 1.0.1): the dashboard generates the player and stream addresses from the IP you open it with. Keep the port in line with the media HTTP port (31888 in the example configurations). |
+| `OUTPUT_RTMP` | `rtmp://127.0.0.1:31935/live/xsx` | RTMP target that the receiver publishes to |
 | `XBOX_AUTH_FILE` | `/files/auth/session.json` | Credential file inside the container |
 | `STATE_DIR` | `/files/state` | Directory for state and control files inside the container. The log `receiver.log` is written here too. |
 | `WWW_DIR` | `/files/www` | Output directory of the player page, written on start. Leave unset to skip. |
@@ -347,7 +347,7 @@ To go back to an old version, import that version's image archive and recreate a
 
 ## ❓ FAQ
 
-* **The dashboard returns 403**: The dashboard only accepts access by IP, for example `http://192.168.1.10:8099/`, and the port has to match `DASHBOARD_BIND`. Access by hostname, or with the wrong port, returns 403.
+* **The dashboard returns 403**: The dashboard only accepts access by IP, for example `http://192.168.1.10:31099/`, and the port has to match `DASHBOARD_BIND`. Access by hostname, or with the wrong port, returns 403.
 
 * **The status stays on "Waiting for XSX to turn on"**: The receiver never wakes the console. Turn the console on and it connects by itself. The matching reason in the log is `CONSOLE_OFFLINE`.
 
@@ -397,7 +397,7 @@ This service is designed for a **trusted LAN**. There are no accounts or passwor
 * **Streaming in and out has no authentication**: any device on the LAN can watch the stream, and while the receiver is not publishing, other devices can publish to the same stream name.
 * **Credentials**: `auth/session.json` under `xsx-files/` holds your Microsoft account credentials. **Never commit it to a public repository or share it with anyone.** `.gitignore` and `.dockerignore` exclude the whole directory.
 
-Use it on a trusted LAN only, and **do not expose ports 8099, 8888 or 1935 to the Internet**.
+Use it on a trusted LAN only, and **do not expose ports 31099, 31888 or 31935 to the Internet**.
 
 ---
 

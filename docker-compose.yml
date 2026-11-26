@@ -66,10 +66,10 @@ services:
       # 播放页的文件由接收端在启动时写进这个目录
       - ./xsx-files/www:/usr/local/srs/objs/nginx/html/xsx:ro
     ports:
-      # RTMP：宿主机的 1935 -> 容器的 1935
-      - "${BIND_IP:-0.0.0.0}:1935:1935/tcp"
-      # HTTP（HTTP-FLV 和播放页）：宿主机的 8888 -> 容器的 8080
-      - "${BIND_IP:-0.0.0.0}:8888:8080/tcp"
+      # RTMP：宿主机的 31935 -> 容器的 1935。用不常用端口，避开常见默认端口
+      - "${BIND_IP:-0.0.0.0}:31935:1935/tcp"
+      # HTTP（HTTP-FLV 和播放页）：宿主机的 31888 -> 容器的 8080
+      - "${BIND_IP:-0.0.0.0}:31888:8080/tcp"
       # 管理接口只开放给宿主机本机。接收端用的是 host 网络，通过 127.0.0.1:1985 访问它
       - "127.0.0.1:1985:1985/tcp"
     logging:
@@ -116,12 +116,12 @@ services:
       # 播放页的输出目录，启动时写入。上面分发服务挂载的就是它
       WWW_DIR: /files/www
       # 管理页的监听地址。监听在本机所有地址上，用任何一个 IP 都能打开管理页；用域名访问不了
-      DASHBOARD_BIND: "${DASHBOARD_BIND:-0.0.0.0:8099}"
+      DASHBOARD_BIND: "${DASHBOARD_BIND:-0.0.0.0:31099}"
       # 别的设备访问分发服务用的地址。保持默认即可（1.0.1 起）：管理页自动用访问它时所用的 IP 生成播放和
-      # 拉流地址。只有 media 的 HTTP 端口不是 8888 时，才需要改这里的端口
-      MEDIA_HTTP_BASE: "${MEDIA_HTTP_BASE:-http://127.0.0.1:8888}"
+      # 拉流地址。端口要和 media 的 HTTP 端口一致（这里是 31888），换了就要跟着改
+      MEDIA_HTTP_BASE: "${MEDIA_HTTP_BASE:-http://127.0.0.1:31888}"
       # 接收端把流推到哪里，也就是分发服务的 RTMP 地址。接收端用 host 网络，所以是宿主机上的 127.0.0.1
-      OUTPUT_RTMP: "${OUTPUT_RTMP:-rtmp://127.0.0.1:1935/live/xsx}"
+      OUTPUT_RTMP: "${OUTPUT_RTMP:-rtmp://127.0.0.1:31935/live/xsx}"
       # 时区，日志的每一行带本地时间
       TZ: "${TZ:-Asia/Shanghai}"
     volumes:
