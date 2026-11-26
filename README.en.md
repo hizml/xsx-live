@@ -1,6 +1,6 @@
 # XSX-Live: Xbox Series X/S native LAN capture and streaming hub
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](receiver/LICENSE.upstream)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-compose-blue.svg)](docker-compose.yml)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](receiver)
 [![Build receiver image](../../actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
@@ -104,23 +104,84 @@ The receiver is split into modules by responsibility (`receiver/src/`):
 
 ## 🚀 Quick start
 
-1. **Get the image**: download the archive from [Releases](../../releases), decompress it and import it. In Container Station, use the import function on the "Images" page. On the command line it is `docker load -i xsx-live-receiver-v1.0.0.tar`.
-2. **Change two addresses**: download [`docker-compose.yml`](docker-compose.yml) from the repository. Change `XBOX_IP` to the LAN IP of the Xbox console, and change `127.0.0.1` in `MEDIA_HTTP_BASE` to the LAN IP of this machine. If you install from the command line, copy [`.env.example`](.env.example) to `.env` and change the two values there instead. The compose file can stay as it is.
-3. **Start**: create the application from `docker-compose.yml`. In Container Station, create a new application, paste the contents, and replace both occurrences of `./xsx-files` with an absolute path (for example `/share/ContainerStation/xsx-live/xsx-files`). On the command line, run `docker compose up -d` in the directory holding the files.
-4. **Sign in and start**: open `http://<YOUR_HOST_IP>:8099/` in a browser, sign in under "Xbox account", then click **Start streaming**.
+Make sure of three things first:
 
-No files need to be prepared beforehand: the data directory `xsx-files/` is created automatically, and the dashboard and player page are inside the image. Check the running state with `docker compose ps` and `docker compose logs -f receiver`. The log is also written to `xsx-files/state/receiver.log`, one line per entry with local time.
+* You have an Xbox Series X|S on the **same LAN** as the machine running this service. The console has to be turned on by itself. The receiver never wakes it.
+* You have a Microsoft account, the one that is signed in on the console.
+* Docker and Docker Compose are installed on the machine, and it can reach Microsoft's sign-in and services (it needs Internet access).
 
-The other two ways to install only differ in where the image comes from. From step 2 on they are the same:
+There are three ways to install. They only differ in where the receiver image comes from. **On a NAS, or if you do not want to compile anything, pick option A.** From step 2 on, all three are identical.
 
-| Way | What to do |
-| :--- | :--- |
-| Pull from a registry | Set `XSX_IMAGE` to `ghcr.io/<account>/xsx-live-receiver:<version>` and run `docker compose pull`. Image packages are private by default. The repository owner has to make the package public on the GitHub Packages page first (once public, it cannot be made private again). |
-| Build locally | Clone the repository and run `docker compose up -d`. The first run compiles the receiver, which takes a few minutes. |
+### Step 1: get the receiver image
+
+#### Option A: import a ready-made image archive (recommended for NAS)
+
+1. Download the archive from the [Releases](../../releases) page of the repository. The file is named like `xsx-live-receiver-v1.0.0.tar.gz`. Decompress it to get the `.tar`.
+2. Import the image. In a NAS UI such as Container Station, use the import function on the "Images" page. On the command line it is `docker load -i xsx-live-receiver-v1.0.0.tar`. The image is named `xsx-live/receiver:latest`, which is exactly the name `docker-compose.yml` uses by default.
+3. Download [`docker-compose.yml`](docker-compose.yml) from the repository. Building locally is not used in a NAS UI, so delete the three lines that start with `build:` before going on.
+
+#### Option B: pull from a registry
+
+1. Download [`docker-compose.yml`](docker-compose.yml) from the repository and delete the three lines that start with `build:`.
+2. Point the image at GitHub's registry. On the command line, set `XSX_IMAGE=ghcr.io/<account>/xsx-live-receiver:<version>` in `.env` (copied from [`.env.example`](.env.example)). In a NAS UI, change the default value on the `image:` line of `docker-compose.yml` to that address.
+3. Pull it with `docker compose pull`. In a NAS UI the pull happens when the application is created.
+
+`ghcr.io` is GitHub's own image registry. Every new release is published there automatically. Image packages are private by default. The repository owner has to make the package public on the GitHub Packages page first (once public, it cannot be made private again) before others can pull it.
+
+#### Option C: build locally
+
+For when you want to change the code. Click "Code" on the repository page to copy the clone URL, then:
+
+```bash
+git clone <clone URL>
+cd xsx-live
+cp .env.example .env
+```
+
+When you run `docker compose up -d` later, the receiver is compiled automatically. The first time takes a few minutes.
+
+### Step 2: change two addresses
+
+All settings in [`docker-compose.yml`](docker-compose.yml) have defaults. Usually you only need to check these two:
+
+| Setting | Change it to | Why |
+| :--- | :--- | :--- |
+| `XBOX_IP` | LAN IP of the Xbox console | The receiver exchanges audio and video with this address only, so streaming cannot work if it is wrong. Give the console a static IP. |
+| `MEDIA_HTTP_BASE` | `http://<YOUR_HOST_IP>:8888` | The dashboard builds the player and stream addresses from it. If it stays `127.0.0.1`, those addresses are wrong for other devices that open the dashboard. |
+
+How to change them depends on how you install:
+
+* **Command line**: change the two values in `.env`. `docker-compose.yml` can stay as it is.
+* **NAS UI**: edit `docker-compose.yml` directly. Replace `192.168.1.180` on the `XBOX_IP` line with the console's IP, and replace `127.0.0.1` on the `MEDIA_HTTP_BASE` line with this machine's IP.
+
+To change ports or the time zone, or to adjust other behavior, see "Environment variables" below.
+
+### Step 3: start
+
+* **NAS UI** (Container Station): create a new application and paste the contents of `docker-compose.yml`. Before pasting, replace both occurrences of `./xsx-files` with an absolute path (for example `/share/ContainerStation/xsx-live/xsx-files`), so the data does not depend on where the compose file lives. Then create and start it.
+* **Command line**: run `docker compose up -d` in the directory holding `docker-compose.yml` and `.env`.
+
+### Step 4: sign in and start streaming
+
+Open `http://<YOUR_HOST_IP>:8099/` in a browser, sign in under "Xbox account" (see "Sign in to the Xbox account" below), then click **Start streaming**.
+
+### After it starts
+
+* No files need to be prepared beforehand: the data directory `xsx-files/` is created on first start. See "Data directory" below for what is inside.
+* The dashboard and the player page are inside the image. No extra files are needed.
+* Check the running state:
+
+```bash
+docker compose ps
+docker compose logs -f receiver
+```
+
+* The log is also written to `xsx-files/state/receiver.log`, one line per entry with local time.
+* For moving to a new version later, see "Updating" below.
 
 ---
 
-### Sign in to the Xbox account
+## 🔐 Sign in to the Xbox account
 
 Xbox remote play needs authorization from a Microsoft account. Open the dashboard, click **Sign in** in the Xbox account panel, and sign in **with the account that is signed in on the console**, then consent.
 
@@ -128,18 +189,24 @@ The browser is then taken to `http://localhost/?code=...` and shows "This site c
 
 The credentials are stored in `xsx-files/auth/session.json` and renewed by the receiver. You only sign in again when they have expired. Click **Start streaming** to connect to the console.
 
+A few notes:
+
+* Finish within **10 minutes** of clicking **Sign in**. If it times out, go back to the dashboard and start again.
+* While valid credentials exist, the dashboard does not allow signing in again. This stops other devices on the LAN from replacing the credentials you are using.
+* By default the Microsoft app registered by the open source project kite is used, so there is nothing to configure. To use your own Microsoft app, see `XBOX_CLIENT_ID` under "Environment variables".
+
 ---
 
-### Automatic builds
+## 🏗 Automatic builds
 
 The repository has a GitHub Actions workflow (`.github/workflows/build.yml`). Push a tag starting with `v`, or run the workflow manually from the Actions page with a version number, and GitHub runs the tests, builds the image and publishes it:
 
 * Image: `ghcr.io/<account>/xsx-live-receiver:<version>` and `:latest`
-* A compressed image archive `xsx-live-receiver-<version>.tar.gz` (attached to the Release for a tag, a build artifact for a manual run). Decompress it before importing
+* A compressed image archive `xsx-live-receiver-<version>.tar.gz` (attached to the Release for a tag, a build artifact for a manual run). Decompress it before importing.
 
-Build status and the artifacts of each run are on the [Actions](../../actions/workflows/build.yml) page of the repository. Tests run first: the unit tests and two end-to-end tests with a real ffmpeg must pass before the image is built. A tag that does not match the version in `receiver/Cargo.toml` fails immediately.
+Build status and the artifacts of each run are on the [Actions](../../actions/workflows/build.yml) page. Tests run first: the unit tests and two end-to-end tests with a real ffmpeg must pass before the image is built. A tag that does not match the version in `receiver/Cargo.toml` fails immediately.
 
-### Version numbers
+## 🏷 Version numbers
 
 The version lives in `receiver/Cargo.toml` and is compiled into the program. To publish a release:
 
@@ -206,12 +273,14 @@ Add a source in **Douyin Live Companion** or **OBS Studio**:
 
 ## ⚙️ Environment variables
 
+Usually only the two entries marked ★ need changing. Everything else has a working default. The `SRS_*` variables of the media server are low-latency tuning and normally stay as they are. The meaning of each one is written in the comments of [`docker-compose.yml`](docker-compose.yml).
+
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. **Must be correct.** The receiver exchanges audio and video with this address only, so give the console a static IP. |
+| ★ `XBOX_IP` | `192.168.1.180` | LAN IP of the Xbox console. **Must be correct.** The receiver exchanges audio and video with this address only, so give the console a static IP. |
 | `BIND_IP` | `0.0.0.0` | Address the SRS ports bind to on the host |
 | `DASHBOARD_BIND` | `0.0.0.0:8099` | Listen address of the dashboard. With `0.0.0.0` the page can be opened through any IP of the machine. |
-| `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | Address other devices use to reach the media server. The dashboard builds the player and stream addresses from it. Set it to the LAN IP of this machine. |
+| ★ `MEDIA_HTTP_BASE` | `http://127.0.0.1:8888` | Address other devices use to reach the media server. The dashboard builds the player and stream addresses from it. Set it to the LAN IP of this machine. |
 | `OUTPUT_RTMP` | `rtmp://127.0.0.1:1935/live/xsx` | RTMP target that the receiver publishes to |
 | `XBOX_AUTH_FILE` | `/files/auth/session.json` | Credential file inside the container |
 | `STATE_DIR` | `/files/state` | Directory for state and control files inside the container. The log `receiver.log` is written here too. |
@@ -223,6 +292,80 @@ Add a source in **Douyin Live Companion** or **OBS Studio**:
 | `AUTH_REDIRECT_URI` | unset | Redirect address after sign-in. Must start with `https://` and be registered in the app. Unset uses the paste-the-URL sign-in. |
 | `XBOX_SERVER_ID` | unset | When the account owns several consoles, the one to stream from |
 | `XSX_IMAGE` | `xsx-live/receiver:latest` | Receiver image. See `.env.example` for using the image published on GitHub. |
+
+---
+
+## 📁 Data directory
+
+`xsx-files/` is created on first start. All three ways of installing use the same directory:
+
+```text
+xsx-files/
+├── auth/
+│   └── session.json       Microsoft account credentials. Created by signing in on the dashboard, renewed by the receiver. Keep it private
+├── state/
+│   ├── control.json       Current state of the streaming switch and "start on power-on"
+│   ├── status.json        Current state of the receiver, read by the dashboard
+│   ├── receiver.log       Receiver log. Rotated to receiver.previous.log when it passes 20MB
+│   └── ffmpeg.log         Output of ffmpeg. Appears once a session has been set up
+└── www/                   Player page (index.html and its library). Written on start and read by the media server
+```
+
+For a backup or a migration, `auth/` and `state/control.json` are enough: the first saves you from signing in again, the second keeps your switch settings. Everything else is regenerated.
+
+---
+
+## 🔄 Updating
+
+All data lives in `xsx-files/`. Moving to a new version does not touch it, so the sign-in and the switch settings are kept.
+
+1. Get the new image: download and import the new image archive from Releases, or run `docker compose pull`.
+2. Recreate the application: in Container Station, use "Rebuild" on the application. On the command line, run `docker compose up -d` in the directory holding the compose file.
+3. Open the dashboard. The footer showing the new version number means it worked. "Too old to report a version" means the old image is still in use.
+
+To go back to an old version, import that version's image archive and recreate again. The data directory stays as it is.
+
+---
+
+## ❓ FAQ
+
+* **The dashboard returns 403**: The dashboard only accepts access by IP, for example `http://192.168.1.10:8099/`, and the port has to match `DASHBOARD_BIND`. Access by hostname, or with the wrong port, returns 403.
+
+* **The status stays on "Waiting for XSX to turn on"**: The receiver never wakes the console. Turn the console on and it connects by itself. The matching reason in the log is `CONSOLE_OFFLINE`.
+
+* **After signing in, the browser shows "This site can't be reached"**: That is expected. When the Microsoft sign-in is done, the browser is taken to `http://localhost/?code=...` on your own machine. Copy the complete URL from the address bar, paste it into the dashboard and click **Finish sign-in**.
+
+* **"The sign-in has expired" or "Sign-in verification failed"**: Finish within 10 minutes of clicking **Sign in**, and use the redirect URL that belongs to that sign-in. Go back to the dashboard and start again.
+
+* **A newly opened player page takes two or three seconds to show a picture**: The media server turns off keyframe caching to keep latency low, so a new viewer waits for the next keyframe. To show a picture immediately (at the cost of higher latency), set `SRS_VHOST_PLAY_GOP_CACHE` to `on` in `docker-compose.yml`.
+
+* **The player page has no sound**: The player page starts muted. Move the mouse or a finger and tap "Sound" in the bottom-right corner. To make a browser source in streaming software start with sound, add `?audio=1` to the address.
+
+* **Streaming dropped after a long time without touching the controller**: By default it does not: when the console warns about idleness, the receiver nudges the stick to keep the session. With `IDLE_KEEPALIVE` set to `0`, the console ends the session after about 12 minutes without controller input. That is a rule of the console.
+
+* **Streaming dropped in the middle**: The receiver reconnects by itself. Nothing to do. The log is in `xsx-files/state/receiver.log`, one line per entry with the time. A `VIDEO_SPS_CHANGED` line means the console changed its encoding parameters and the receiver kept writing. It is not a fault.
+
+* **Streaming stopped when the console shut down**: This is intended: when the console shuts down, the receiver ends the session and leaves the console alone while it powers off. Whether streaming starts again on the next power-on is decided by the "Start streaming when the console turns on" switch in the dashboard.
+
+* **How do I tell which version is running?**: Look at the dashboard footer, or at the first line of the log, `VERSION version=…`. See "Version numbers" above.
+
+---
+
+## 🗂 Repository layout
+
+```text
+.
+├── receiver/              Receiver (Rust)
+│   ├── Cargo.toml         The version number lives here
+│   ├── Dockerfile         Build file used by GitHub Actions and by local builds
+│   └── src/               Source code. Each module's job is described under "Architecture"
+├── dashboard/             Static files of the dashboard: index.html, app.js, i18n.js, style.css
+├── www/                   Player page: index.html and the mpegts.js it uses
+├── docker-compose.yml     Example configuration, with a comment on every setting
+├── .env.example           Example environment variables
+├── srs.conf               Reference configuration of the media server, equivalent to the SRS_* variables in the compose file
+└── .github/workflows/     GitHub Actions: tests, building the image, publishing
+```
 
 ---
 
@@ -240,4 +383,4 @@ Use it on a trusted LAN only, and **do not expose ports 8099, 8888 or 1935 to th
 
 ## 📄 License
 
-The receiver is licensed under the MIT license. The full text is in [`receiver/LICENSE.upstream`](receiver/LICENSE.upstream). The protocol reverse engineering and signaling implementation build on excellent community projects such as `DRHATL95/kite` and `unknownskl/xbox-xcloud-player`. Many thanks to their authors. The `mpegts.js` library used by the player page is MIT licensed too and distributed with its license (`www/vendor/LICENSE`).
+This project is licensed under the MIT license. The full text is in [LICENSE](LICENSE) at the root of the repository (the same text as `receiver/LICENSE.upstream`, which ships with the receiver code). The protocol reverse engineering and signaling implementation build on excellent community projects such as `DRHATL95/kite` and `unknownskl/xbox-xcloud-player`. Many thanks to their authors. The `mpegts.js` library used by the player page is MIT licensed too and distributed with its license (`www/vendor/LICENSE`).
