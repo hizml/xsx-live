@@ -153,7 +153,7 @@ sequenceDiagram
 不需要下载和导入镜像包，NAS 能访问 `ghcr.io`（GitHub 运营的镜像仓库）即可，创建应用时自动拉取镜像。每个版本发布后都会自动发布到这里。
 
 1. 复制对应品牌的拉取版文件：QNAP 用 [`compose/qnap-pull.yml`](compose/qnap-pull.yml)，群晖用 [`compose/synology-pull.yml`](compose/synology-pull.yml)。
-2. 把文件里标 `TODO` 的两处改成自己的：主机地址，以及 `image:` 里 `ghcr.io/<账号>/` 中的账号（仓库所有者的 GitHub 账号）。
+2. 把文件里标 `TODO` 的地方改成自己的（只有主机地址一处）。镜像地址已经写好，指向本仓库在 ghcr.io 上发布的镜像。
 3. 按方式 A 中对应品牌的步骤创建应用（跳过导入镜像）。
 
 镜像包默认是私有的，仓库所有者需先在 GitHub 的 Packages 页面将其改为公开（此后不能再改回私有），其他用户才能拉取。
@@ -219,7 +219,7 @@ Xbox 远程串流需要微软账号授权。打开管理页，在「Xbox 账号�
 
 仓库带一个 GitHub Actions 工作流（`.github/workflows/build.yml`）：推送 `v` 开头的标签，或在 Actions 页面手动运行并填入版本号，GitHub 会在其服务器上运行测试、编译镜像并发布：
 
-* 镜像：`ghcr.io/<账号>/xsx-live-receiver:<版本>` 和 `:latest`
+* 镜像：`ghcr.io/hizml/xsx-live-receiver:<版本>` 和 `:latest`
 * 压缩的镜像包 `xsx-live-receiver-<版本>.tar.gz`（打标签时挂在 Release 上，手动运行时是构建产物），导入前要先解压
 
 构建状态和每次的产物在仓库的 [Actions](../../actions/workflows/build.yml) 页面。测试先跑：单元测试和两个用真实 ffmpeg 的端到端测试都通过，才会编译镜像；标签和 `receiver/Cargo.toml` 里的版本号不一致时直接失败。
@@ -309,7 +309,7 @@ Xbox 远程串流需要微软账号授权。打开管理页，在「Xbox 账号�
 | `XBOX_CLIENT_ID` | 内置 | 管理页登录用的微软应用 ID。不设则用内置的，它来自开源项目 kite |
 | `AUTH_REDIRECT_URI` | 不设 | 登录后的跳回地址，必须以 `https://` 开头并已在应用里登记；不设则按粘贴网址的方式登录 |
 | `XBOX_SERVER_ID` | 不设 | 账号下有多台主机时，指定要串流的那一台 |
-| `XSX_IMAGE` | `xsx-live/receiver:latest` | 接收端镜像。想用 GitHub 上发布的镜像，见 `.env.example` 里的说明 |
+| `XSX_IMAGE` | `xsx-live/receiver:latest` | 接收端镜像。想用 GitHub 上发布的镜像，设成 `ghcr.io/hizml/xsx-live-receiver:<版本>` 后 `docker compose pull` |
 
 ---
 

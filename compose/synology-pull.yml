@@ -3,7 +3,7 @@
 # （ghcr.io）拉取镜像。需要 NAS 能访问 ghcr.io。
 #
 # 用法：
-#   1. 把下面标了 TODO 的地方改成自己的（搜索 TODO，共两处：主机地址、镜像地址里的账号）
+#   1. 把下面标了 TODO 的地方改成自己的（搜索 TODO，只有主机地址一处）
 #   2. Container Manager 的「项目」页点「新增」：填项目名称（如 xsx-live），路径选一个用来存放数据的
 #      文件夹（如 docker/xsx-live），选「创建 docker-compose.yml」，贴入文件内容，一路下一步直到完成。
 #      镜像会在创建时自动拉取
@@ -78,9 +78,9 @@ services:
 
   # 接收端：连上 Xbox 收画面，推给分发服务，同时提供管理页
   receiver:
-    # TODO：把 <账号> 改成仓库所有者的 GitHub 账号。地址就是镜像仓库（ghcr.io）里这个镜像的页面地址。
-    # :latest 表示最新发布的版本，每次有新版本时重建一次应用就会更新
-    image: ghcr.io/<账号>/xsx-live-receiver:latest
+    # 从 GitHub 的镜像仓库（ghcr.io）拉取本仓库发布的镜像。:latest 表示最新发布的版本，
+    # 每次有新版本时重建一次应用就会更新
+    image: ghcr.io/hizml/xsx-live-receiver:latest
     container_name: xsx-receiver
     restart: unless-stopped
     # 由 docker 的 init 进程当 1 号进程，负责回收接收端拉起的 ffmpeg 这类子进程

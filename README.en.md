@@ -153,7 +153,7 @@ The [`compose/`](compose) directory holds ready-made compose files per NAS brand
 No downloading or importing an archive. The NAS only needs access to `ghcr.io`, the registry run by GitHub. Every version is published there automatically, and the image is pulled when the application is created.
 
 1. Copy the pull variant for your brand: [`compose/qnap-pull.yml`](compose/qnap-pull.yml) for QNAP, [`compose/synology-pull.yml`](compose/synology-pull.yml) for Synology.
-2. Change the two places marked `TODO`: the console address, and the account in `ghcr.io/<account>/` on the `image:` line (the GitHub account of the repository owner).
+2. Change the place marked `TODO` (only the console address). The image address is already filled in and points to the image this repository publishes on ghcr.io.
 3. Create the application as in option A for your brand (skip the image import).
 
 Image packages are private by default. The repository owner has to make the package public on the GitHub Packages page first (once public, it cannot be made private again) before others can pull it.
@@ -219,7 +219,7 @@ A few notes:
 
 The repository has a GitHub Actions workflow (`.github/workflows/build.yml`). Push a tag starting with `v`, or run the workflow manually from the Actions page with a version number, and GitHub runs the tests, builds the image and publishes it on its own servers:
 
-* Image: `ghcr.io/<account>/xsx-live-receiver:<version>` and `:latest`
+* Image: `ghcr.io/hizml/xsx-live-receiver:<version>` and `:latest`
 * A compressed image archive `xsx-live-receiver-<version>.tar.gz` (attached to the Release for a tag, a build artifact for a manual run). Decompress it before importing.
 
 Build status and the artifacts of each run are on the [Actions](../../actions/workflows/build.yml) page. Tests run first: the unit tests and two end-to-end tests with a real ffmpeg must pass before the image is built. A tag that does not match the version in `receiver/Cargo.toml` fails immediately.
@@ -309,7 +309,7 @@ Usually only the entry marked ★ needs changing. Everything else has a working 
 | `XBOX_CLIENT_ID` | built in | Microsoft app ID used by the dashboard sign-in. Unset uses the built-in one, which comes from the open source project kite. |
 | `AUTH_REDIRECT_URI` | unset | Redirect address after sign-in. Must start with `https://` and be registered in the app. Unset uses the paste-the-URL sign-in. |
 | `XBOX_SERVER_ID` | unset | When the account owns several consoles, the one to stream from |
-| `XSX_IMAGE` | `xsx-live/receiver:latest` | Receiver image. See `.env.example` for using the image published on GitHub. |
+| `XSX_IMAGE` | `xsx-live/receiver:latest` | Receiver image. To use the image published on GitHub, set it to `ghcr.io/hizml/xsx-live-receiver:<version>` and run `docker compose pull`. |
 
 ---
 
