@@ -261,6 +261,20 @@ async fn main()->Result<()> {
  xsx_native::health::update("stopped",serde_json::json!({}))?;
  log!("STOPPED");Ok(())
 }
+// 接收端要连的主机地址。XBOX_IP 设了就以它为准，现有安装的行为不变；没设时用建会话回应里的主机地址，
+// 取不到就报一个能认出来的原因（CONSOLE_ADDRESS_UNAVAILABLE），主循环稍后重试
+fn console_address(configured:Option<&str>,cfg:&xsx_native::xhome::StreamConfig)->Result<IpAddr>{
+ let from_session=cfg.console_ipv4();
+ let Some(value)=configured.map(str::trim).filter(|value|!value.is_empty())else{
+  let address=from_session.ok_or_else(||anyhow!("CONSOLE_ADDRESS_UNAVAILABLE"))?;
+  log!("CONSOLE_ADDRESS source=session ipv4={address}");return Ok(IpAddr::V4(address));
+ };
+ let address:IpAddr=value.parse().context("XBOX_IP 要写成一个 IP 地址")?;
+ // 诊断用：显式配置时也记下会话回应里给出的地址，并和配置比一下，据此判断不配置行不行
+ let is_same=match address{IpAddr::V4(v4)=>from_session==Some(v4),IpAddr::V6(v6)=>v6.to_ipv4_mapped()==from_session};
+ log!("CONSOLE_ADDRESS source=config configured={address} session_ipv4={} is_same={is_same}",from_session.map(|address|address.to_string()).unwrap_or_else(||"none".into()));
+ Ok(address)
+}
 async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tokio::sync::watch::Receiver<xsx_native::control::ControlState>,revision:u64)->Result<()> {
  let setup=async {
   let auth=XboxAuth::new();if !auth.load_cached_tokens().await.context("Authorization unavailable")?{bail!("AUTH_REQUIRED");}
@@ -290,10 +304,14 @@ async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tok
   }
  });
  let (console_off,power_task)=spawn_power_probe(client.clone(),console_id);
- let result=tokio::select! {
-  value=receive(&client,&cfg.session_path,revision,console_off)=>value,
-  _=shutdown.changed()=>{log!("STOP_REQUESTED");Ok(())},
-  _=wait_for_revision_change(control.clone(),revision)=>{log!("CONTROL_SESSION_END");Ok(())}
+ let address=console_address(std::env::var("XBOX_IP").ok().as_deref(),&cfg);
+ let result=match address{
+  Ok(console_ip)=>tokio::select! {
+   value=receive(&client,&cfg.session_path,revision,console_off,console_ip)=>value,
+   _=shutdown.changed()=>{log!("STOP_REQUESTED");Ok(())},
+   _=wait_for_revision_change(control.clone(),revision)=>{log!("CONTROL_SESSION_END");Ok(())}
+  },
+  Err(error)=>Err(error),
  };
  keep_task.abort();let _=keep_task.await;power_task.abort();let _=power_task.await;
  match tokio::time::timeout(Duration::from_secs(8),client.delete_session(&cfg.session_path)).await{
@@ -301,8 +319,7 @@ async fn run_session(mut shutdown:tokio::sync::watch::Receiver<bool>,control:tok
  }
  result
 }
-async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::sync::watch::Receiver<bool>)->Result<()>{
- let xbox_ip:IpAddr=std::env::var("XBOX_IP").unwrap_or_else(|_|"192.168.1.180".into()).parse()?;
+async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::sync::watch::Receiver<bool>,xbox_ip:IpAddr)->Result<()>{
  let probe=StdUdpSocket::bind("0.0.0.0:0")?;probe.connect(SocketAddr::new(xbox_ip,9002))?;let local_ip=probe.local_addr()?.ip();drop(probe);
  let udp=UdpSocket::bind(SocketAddr::new(local_ip,0)).await?;let local=udp.local_addr()?;
  let mut rtc=Rtc::new(Instant::now());rtc.add_local_candidate(Candidate::host(local,"udp").map_err(|e|anyhow!("{e}"))?);
@@ -513,4 +530,28 @@ mod tests {
   assert!(!should_log_inbound(INBOUND_LOG_FULL_TIMES+1));
   assert!(should_log_inbound(INBOUND_LOG_EVERY));
  }
+
+    fn session_with_console(ipv4:Option<&str>)->xsx_native::xhome::StreamConfig{
+        let details=xsx_native::xhome::ServerDetails{ip_address:None,ipv4_address:ipv4.map(str::to_owned),ipv6_address:None,port:None,tcp_port:None,udp_port:None,sdp:None};
+        xsx_native::xhome::StreamConfig{session_id:String::new(),session_path:String::new(),exchange_response:String::new(),gs_token:String::new(),keep_alive_pulse_seconds:None,server_details:Some(details)}
+    }
+    // XBOX_IP 设了就以它为准，不受会话回应影响：现有安装的行为不变
+    #[test]
+    fn configured_console_address_wins(){
+        let session=session_with_console(Some("192.168.1.10"));
+        let expected:IpAddr="192.168.1.180".parse().unwrap();
+        assert_eq!(console_address(Some("192.168.1.180"),&session).unwrap(),expected);
+        assert!(console_address(Some("not-an-ip"),&session).unwrap_err().to_string().contains("XBOX_IP"));
+        assert_eq!(console_address(Some("  "),&session).unwrap(),"192.168.1.10".parse::<IpAddr>().unwrap(),"只有空白等同于没设");
+    }
+    // 没设 XBOX_IP 时用会话回应里的主机地址；回应里没有可用的私有地址就报一个能认出来的原因
+    #[test]
+    fn console_address_falls_back_to_the_session_response(){
+        let expected:IpAddr="192.168.1.10".parse().unwrap();
+        assert_eq!(console_address(None,&session_with_console(Some("192.168.1.10"))).unwrap(),expected);
+        for unusable in [Some("203.0.113.5"),Some("192.0.2.1"),Some("not-an-ip"),None]{
+            let error=console_address(None,&session_with_console(unusable)).unwrap_err().to_string();
+            assert!(error.contains("CONSOLE_ADDRESS_UNAVAILABLE"),"{unusable:?} 不该被当成主机地址：{error}");
+        }
+    }
 }

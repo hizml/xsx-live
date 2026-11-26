@@ -2,6 +2,7 @@ use crate::auth::XboxAuth;
 use crate::error::{Result, XboxError};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
 use tracing::{debug, info, warn};
 
 /// Xbox console information from xHome API
@@ -58,6 +59,20 @@ pub struct StreamConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub keep_alive_pulse_seconds: Option<u32>,
+    /// 建会话时微软返回的主机信息，里面有主机在局域网里的地址
+    #[serde(rename = "serverDetails", default)]
+    pub server_details: Option<ServerDetails>,
+}
+
+impl StreamConfig {
+    /// 主机在局域网里的 IPv4 地址，取自建会话时的回应。只认私有地址（10.x、172.16 到 172.31、192.168.x）：
+    /// 这套服务只在局域网里工作，回应里出现别的地址也不该去连
+    pub fn console_ipv4(&self) -> Option<Ipv4Addr> {
+        let details = self.server_details.as_ref()?;
+        [&details.ipv4_address, &details.ip_address].into_iter().flatten()
+            .filter_map(|address| address.trim().parse::<Ipv4Addr>().ok())
+            .find(|address| address.is_private())
+    }
 }
 
 /// xHome streaming API client
@@ -176,22 +191,23 @@ struct SessionStateResponse {
     server_details: Option<ServerDetails>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // net fields are API-mirror data kept for Debug/diagnostics; not consumed yet
-struct ServerDetails {
+/// 建会话时微软返回的主机信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerDetails {
     #[serde(rename = "ipAddress")]
-    ip_address: Option<String>,
+    pub ip_address: Option<String>,
+    /// 主机的局域网 IPv4 地址
     #[serde(rename = "ipV4Address")]
-    ipv4_address: Option<String>,
+    pub ipv4_address: Option<String>,
     #[serde(rename = "ipV6Address")]
-    ipv6_address: Option<String>,
-    port: Option<u16>,
+    pub ipv6_address: Option<String>,
+    pub port: Option<u16>,
     #[serde(rename = "tcpPort")]
-    tcp_port: Option<u16>,
+    pub tcp_port: Option<u16>,
     #[serde(rename = "udpPort")]
-    udp_port: Option<u16>,
+    pub udp_port: Option<u16>,
     #[serde(rename = "sdp")]
-    sdp: Option<String>,
+    pub sdp: Option<String>,
 }
 
 /// Configuration response from session
@@ -441,7 +457,7 @@ impl XHomeClient {
 
         // If session is provisioning, we need to poll until it's ready
         let session_path = session_response.session_path.clone();
-        let (exchange_response, _server_details, keepalive_seconds) =
+        let (exchange_response, server_details, keepalive_seconds) =
             if session_response.state.as_deref() == Some("Provisioning") {
                 info!("Session is provisioning, waiting for it to be ready...");
                 self.wait_for_session_ready(&session_path).await?
@@ -480,6 +496,7 @@ impl XHomeClient {
             exchange_response: exchange_response.unwrap_or_default(),
             gs_token: gs_token.to_string(),
             keep_alive_pulse_seconds: keepalive_seconds,
+            server_details,
         })
     }
 

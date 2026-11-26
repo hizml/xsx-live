@@ -238,9 +238,34 @@ async fn media_status(app: &App) -> Value {
     }
 }
 
+// 分发服务对外的根地址。MEDIA_HTTP_BASE 指向本机回环地址（也就是默认值，说明没有专门配置）时，
+// 改用浏览器访问管理页用的 IP：分发服务和管理页跑在同一台机器上，这样别的设备拿到的地址才是对的
+fn media_base(configured: &str, host: &str) -> String {
+    let configured = configured.trim_end_matches('/');
+    let Some((scheme, address)) = configured.split_once("://") else { return configured.to_owned() };
+    let (authority, path) = address.split_at(address.find('/').unwrap_or(address.len()));
+    let (configured_host, port) = split_authority(authority);
+    let Some(access) = host.rsplit_once(':').map(|(ip, _)| ip) else { return configured.to_owned() };
+    if !is_loopback(configured_host) { return configured.to_owned(); }
+    format!("{scheme}://{access}{}{path}", port.map(|port| format!(":{port}")).unwrap_or_default())
+}
+
+// 把「主机[:端口]」拆成主机和端口。IPv6 地址自带冒号，要带着方括号才认得出端口
+fn split_authority(authority: &str) -> (&str, Option<&str>) {
+    match authority.rsplit_once(':') {
+        Some((host, port)) if !port.contains(']') => (host, Some(port)),
+        _ => (authority, None),
+    }
+}
+
+fn is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 // 管理页上给出的各个地址。管理页自己的地址跟着这次访问用的 IP 走
 fn links(app: &App, host: &str) -> Value {
-    let base = app.media_base.trim_end_matches('/');
+    let base = media_base(&app.media_base, host);
     json!({
         "dashboard":format!("http://{host}/"),
         "browser":format!("{base}/xsx/index.html"),
@@ -660,5 +685,22 @@ mod tests {
         assert!(page.contains("<title>Xbox sign-in successful</title>") && page.contains("Back to the dashboard"), "{page}");
         let zh = String::from_utf8_lossy(&text_page(login::Lang::Zh, "标题", &["第一段".to_owned(), "<b>原样显示</b>".to_owned()]).into_body().collect().await.unwrap().to_bytes()).into_owned();
         assert!(zh.contains("<html lang=\"zh-CN\">") && zh.contains("<p>第一段</p><p>&lt;b&gt;原样显示&lt;/b&gt;</p>"), "{zh}");
+    }
+
+    // MEDIA_HTTP_BASE 是默认的回环地址时，播放地址用访问管理页的 IP 生成；显式配置了别的地址则原样使用
+    #[test]
+    fn media_links_follow_the_access_address_unless_configured() {
+        for (configured, expected) in [
+            ("http://127.0.0.1:8888", "http://192.0.2.10:8888"),
+            ("http://localhost:8888/", "http://192.0.2.10:8888"),
+            ("http://127.0.0.1:8888/srs", "http://192.0.2.10:8888/srs"),
+            ("http://127.0.0.1", "http://192.0.2.10"),
+        ] {
+            assert_eq!(media_base(configured, "192.0.2.10:8099"), expected, "{configured}");
+        }
+        assert_eq!(media_base("http://[::1]:8888", "[::1]:8099"), "http://[::1]:8888");
+        assert_eq!(media_base("http://192.0.2.50:8888", "192.0.2.10:8099"), "http://192.0.2.50:8888", "显式配置的地址不替换");
+        assert_eq!(media_base("192.0.2.50", "192.0.2.10:8099"), "192.0.2.50", "不是网址的值原样返回");
+        assert_eq!(media_base("http://127.0.0.1:8888", ""), "http://127.0.0.1:8888", "拿不到访问地址时不替换");
     }
 }
