@@ -39,8 +39,9 @@ const HELLO_FRAMES:u8=2;
 // 所以它只发生在「10 分钟没人碰手柄」之后，主机上有人在玩时不会推摇杆。
 // 官方客户端是之后一直每 30 秒重复；这里一轮只推两次，因为每推一次主机画面上会弹一次「正在远程游戏」
 const IDLE_REPEAT:Duration=Duration::from_secs(30);
-// 警告之后这么长时间之内允许重复推。主机给的倒计时是 120 秒，第二次推动落在一分钟之内
-const IDLE_WINDOW:Duration=Duration::from_secs(60);
+// 警告之后这么长时间之内允许重复推。窗口收得和重复间隔一样长，等于每轮警告只推一次
+// （用户定的：提示弹多了烦）。主机给的倒计时是 120 秒，实测推一次就够挡住
+const IDLE_WINDOW:Duration=Duration::from_secs(30);
 const RECENTER_DELAY:Duration=Duration::from_millis(40);
 // 串流进行时定期向微软查主机的电源状态。连续两次不是「开着」就结束会话
 const POWER_POLL_SECS:u64=30;
@@ -483,20 +484,16 @@ mod tests {
   assert!(!pad.release,"微脉冲发完后手柄应该已经松开");
  }
  #[tokio::test(start_paused=true)]
- async fn repeats_every_30_seconds_only_while_the_countdown_runs(){
+ async fn pulses_once_per_warning_round(){
   let mut pad=PadPulse::default();let mut rtc=Rtc::new(Instant::now());
-  pad.on_idle_warning(&mut rtc,None);advance(&mut pad,ACTION_TICKS);
-  // 距上次微脉冲还不满 30 秒：不推
-  tokio::time::advance(Duration::from_secs(29)).await;
-  assert_eq!(advance(&mut pad,1),vec![PadStep::None]);
-  // 满 30 秒、倒计时还没完：先重新注册手柄，再等一个 tick，然后才推
-  tokio::time::advance(Duration::from_secs(2)).await;
-  assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None,PadStep::None,PadStep::Pulse,PadStep::None]);
+  pad.on_idle_warning(&mut rtc,None);
+  assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None,PadStep::Pulse,PadStep::None,PadStep::None]);
   assert!(!pad.release);
-  // 警告给的 120 秒倒计时已经过去，之后哪怕再过很久也不再重复
-  tokio::time::advance(IDLE_WINDOW).await;
+  // 同一轮里过了重复间隔也不再推：窗口已经结束，收手
+  tokio::time::advance(Duration::from_secs(31)).await;
   assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None;ACTION_TICKS]);
-  assert_eq!(pad.warned_at,None);
+  assert_eq!(pad.warned_at,None,"窗口已结束");
+  // 之后哪怕再过很久也不动
   tokio::time::advance(Duration::from_secs(600)).await;
   assert_eq!(advance(&mut pad,ACTION_TICKS),vec![PadStep::None;ACTION_TICKS]);
  }
