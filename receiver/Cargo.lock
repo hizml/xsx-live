@@ -2237,7 +2237,7 @@ dependencies = [
 
 [[package]]
 name = "xsx-native"
-version = "8.0.0"
+version = "8.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
