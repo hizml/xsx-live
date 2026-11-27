@@ -446,6 +446,8 @@ impl XHomeClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
+            // 单独记一条：这条错误要在容器日志里也看得到，别只靠上层的上下文
+            warn!("Failed to create session: HTTP {} - {}", status, error_text);
             return Err(XboxError::StreamError(format!(
                 "Failed to create session: HTTP {} - {}",
                 status, error_text

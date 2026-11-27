@@ -255,7 +255,9 @@ async fn main()->Result<()> {
   if *shutdown.borrow(){break;}
   if control.borrow().revision!=desired.revision {continue;}
   // 失败原因写进状态文件，管理页据此区分「凭据失效」和「主机不在线」；截断以免异常页面撑大文件
-  let reason=outcome.as_ref().err().map(|e|e.to_string()).unwrap_or_default();
+  // 错误链要完整：anyhow 默认的 Display 只有最外层上下文（例如「session setup」），
+  // 真正的 HTTP 状态码和响应体在里面一层，排查时全靠它
+  let reason=outcome.as_ref().err().map(|e|format!("{e:#}")).unwrap_or_default();
   if reason==SHUTDOWN_REASON{
    handle_console_shutdown(control_tx.clone(),control.clone(),desired.revision,shutdown.clone()).await;continue;
   }
