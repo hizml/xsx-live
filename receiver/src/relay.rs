@@ -59,6 +59,14 @@ fn hex(bytes:&[u8])->String{bytes.iter().map(|b|format!("{b:02x}")).collect()}
 pub struct MediaRelay{
  child:Child,pipe:Option<ChildStdin>,started:Instant,video_clock:Clock,audio_clock:Clock,sps:Vec<u8>,pps:Vec<u8>,ready:bool,await_key:bool,cluster:Option<u64>,queued_audio:VecDeque<(u64,Vec<u8>)>,pub video_frames:u64,pub audio_packets:u64
 }
+ // 一帧视频要不要写进输出
+ #[derive(Debug,PartialEq)]
+ enum FrameDecision{Write,WaitForKey}
+ // 帧不完整（中间丢了 UDP 包）就一律不写，关键帧也不例外：残缺的关键帧一旦写出去，
+ // 后面依赖它的一整组帧都会解码报错，播放端表现为卡顿和花屏。丢过帧之后，等下一个完整的关键帧再继续
+ fn frame_decision(is_contiguous:bool,is_key:bool,awaiting_key:bool)->FrameDecision{
+  if !is_contiguous||awaiting_key&&!is_key{FrameDecision::WaitForKey}else{FrameDecision::Write}
+ }
 impl MediaRelay{
  pub fn new(url:&str)->Result<Self>{
   let dir=PathBuf::from(std::env::var("STATE_DIR").unwrap_or_else(|_|"/state".into()));std::fs::create_dir_all(&dir)?;
@@ -98,8 +106,12 @@ impl MediaRelay{
  pub fn video(&mut self,sample:Sample<'_>)->Result<()>{
   let pts=self.video_clock.timestamp(sample.time,self.started.elapsed().as_micros()as u64);let units=nals(sample.data);let key=sample.is_keyframe||units.iter().any(|n|n[0]&31==5);
   for n in &units{match n[0]&31{7=>{if self.ready{self.check_sps_change(n)?;}self.sps=n.to_vec();},8=>self.pps=n.to_vec(),_=>{}}}
-  if !sample.is_contiguous&&!key{self.await_key=true;}
-  if self.await_key&&!key{return Ok(());}if self.sps.is_empty()||self.pps.is_empty(){return Ok(());}
+  match frame_decision(sample.is_contiguous,key,self.await_key){
+   FrameDecision::Write=>{}
+   FrameDecision::WaitForKey=>{if !self.await_key{crate::log!("VIDEO_FRAME_DROPPED key={key} reason={}",if sample.is_contiguous{"awaiting_key"}else{"incomplete"});}
+    self.await_key=true;return Ok(());}
+  }
+  if self.sps.is_empty()||self.pps.is_empty(){return Ok(());}
   if !self.ready{self.header()?;while let Some((t,b))=self.queued_audio.pop_front(){self.block(2,t,true,&b)?;}}
   self.await_key=false;let mut frame=Vec::with_capacity(sample.data.len());for nal in units{frame.extend_from_slice(&(nal.len()as u32).to_be_bytes());frame.extend_from_slice(nal);}
   self.block(1,pts,key,&frame)?;self.video_frames+=1;Ok(())
@@ -257,5 +269,17 @@ mod tests {
   let decoded=run_pipeline("new-size",&before,&after);
   assert_eq!(decoded.video,SWAP+after.len(),"输出里解码出的视频帧数不对：{}",decoded.report);
   assert!(decoded.audio>=AUDIO_MIN_FRAMES,"输出里解码出的音频帧数太少：{}",decoded.report);
+ }
+ // 帧不完整（丢了 UDP 包）时一律不写，关键帧也不例外：残缺的关键帧会让后面一整组帧解码报错。
+ // 丢过帧后要等下一个完整的关键帧；完整的普通帧在正常时照常写
+ #[test]
+ fn incomplete_frames_are_never_written(){
+  use FrameDecision::*;
+  assert_eq!(frame_decision(false,true,false),WaitForKey,"残缺的关键帧不能写出去");
+  assert_eq!(frame_decision(false,false,false),WaitForKey,"残缺的普通帧不能写出去");
+  assert_eq!(frame_decision(true,false,true),WaitForKey,"丢过帧后，普通帧要等关键帧");
+  assert_eq!(frame_decision(false,true,true),WaitForKey,"等待期间又来一个残缺的关键帧，继续等");
+  assert_eq!(frame_decision(true,true,true),Write,"完整的关键帧到了才恢复");
+  assert_eq!(frame_decision(true,false,false),Write,"正常时完整的关键帧和普通帧都写");
  }
 }

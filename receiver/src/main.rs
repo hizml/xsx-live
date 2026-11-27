@@ -1,7 +1,7 @@
 // Headless LAN-only encoded-media receiver. Upstream references are pinned in UPSTREAM_COMMIT.
 use anyhow::{anyhow,bail,Context,Result};
 use xsx_native::log;
-use std::{collections::HashMap,net::{IpAddr,SocketAddr,UdpSocket as StdUdpSocket},os::unix::fs::DirBuilderExt,path::{Path,PathBuf},time::{Duration,Instant}};
+use std::{collections::HashMap,net::{IpAddr,SocketAddr,UdpSocket as StdUdpSocket},os::unix::fs::DirBuilderExt,path::{Path,PathBuf},sync::Arc,time::{Duration,Instant}};
 use str0m::{Rtc,Candidate,Event,Input,Output};
 use str0m::channel::{ChannelId,ChannelConfig};
 use str0m::change::SdpAnswer;
@@ -10,6 +10,21 @@ use str0m::net::{Protocol,Receive};
 use tokio::net::UdpSocket;
 use xsx_native::relay::{MediaRelay,Sample};
 use xsx_native::{auth::XboxAuth,xhome::XHomeClient,rtc::protocol::{self,InboundMsg}};
+// 收包任务：只管从套接字收包、塞进队列，别的不做。这样它几乎不会被阻塞，内核的接收缓冲区
+// 一直是空的，不会因为主循环处理慢而丢包。队列满了（主循环卡了很久）就丢掉新包并计数
+fn spawn_udp_reader(udp:Arc<UdpSocket>)->(tokio::sync::mpsc::Receiver<(Vec<u8>,SocketAddr)>,Arc<std::sync::atomic::AtomicU64>){
+ let (tx,rx)=tokio::sync::mpsc::channel::<(Vec<u8>,SocketAddr)>(UDP_QUEUE_CAPACITY);
+ let dropped=Arc::new(std::sync::atomic::AtomicU64::new(0));
+ let dropped_for_task=Arc::clone(&dropped);
+ tokio::spawn(async move{
+  let mut buf=vec![0u8;UDP_BUFFER_BYTES];
+  loop{
+   let Ok((n,src))=udp.recv_from(&mut buf).await else{break};
+   if tx.try_send((buf[..n].to_vec(),src)).is_err(){dropped_for_task.fetch_add(1,std::sync::atomic::Ordering::Relaxed);}
+  }
+ });
+ (rx,dropped)
+}
 // 取出一帧里分发用得上的部分
 fn sample_of(data:&str0m::media::MediaData)->Sample<'_>{Sample{data:&data.data,time:data.time.as_micros(),is_contiguous:data.contiguous,is_keyframe:data.is_keyframe()}}
 const CHANNELS:[(&str,&str);4]=[("chat","chatV1"),("control","controlV1"),("message","messageV1"),("input","1.0")];
@@ -47,6 +62,12 @@ const IDLE_WINDOW:Duration=Duration::from_secs(30);
 // 这时释放虚拟手柄。新警告的实际间隔约 10 分钟，这里留 3 分钟余量
 const IDLE_ROUND_GAP:Duration=Duration::from_secs(780);
 const RECENTER_DELAY:Duration=Duration::from_millis(40);
+// 收包队列的上限：主循环每处理完一个包才取下一个，处理慢了包就积压在这里（用户态内存，
+// 不受内核那 200KB 左右的 UDP 缓冲限制）。30 Mbps 约 250 包/秒，16 万个包够撑十来分钟
+const UDP_QUEUE_CAPACITY:usize=160_000;
+const UDP_BUFFER_BYTES:usize=65536;
+// 收画面用的 UDP 套接字的接收缓冲区大小
+const UDP_RECV_BUFFER_BYTES:usize=8*1024*1024;
 // 串流进行时定期向微软查主机的电源状态。连续两次不是「开着」就结束会话
 const POWER_POLL_SECS:u64=30;
 const POWER_OFF_CONFIRM:u8=2;
@@ -338,7 +359,18 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
  let probe=StdUdpSocket::bind("0.0.0.0:0")?;probe.connect(probe_target)?;let local_ip=probe.local_addr()?.ip();drop(probe);
  // 主机的地址：配置了就有；自动模式从收到的第一条主机候选里学到
  let mut peer_ip:Option<IpAddr>=console.map(|console|console.ip());
- let udp=UdpSocket::bind(SocketAddr::new(local_ip,0)).await?;let local=udp.local_addr()?;
+ // 尽量把内核的接收缓冲区调大（第二道保险；第一道是下面的收包任务 + 队列）。
+ // 系统默认只有 200KB 左右，30 Mbps 的流只够撑 50 毫秒，瞬间涌入的包一多内核就丢。
+ // 能调到多大由系统的 net.core.rmem_max 决定：多数 NAS 出厂是 208KB，这时等于没调；
+ // 调大过的机器上这里会真的生效。下面那行日志如实报出实际大小，排查时看它
+ let std_udp=StdUdpSocket::bind(SocketAddr::new(local_ip,0))?;
+ std_udp.set_nonblocking(true)?;
+ // set_recv_buffer_size 在标准库里还没稳定，用 socket2（只操作已有的套接字，不另开）
+ let sock=socket2::SockRef::from(&std_udp);
+ if let Err(error)=sock.set_recv_buffer_size(UDP_RECV_BUFFER_BYTES){log!("UDP_RECV_BUFFER set_failed=true error={error}");}
+ log!("UDP_RECV_BUFFER size={}",sock.recv_buffer_size().unwrap_or(0));
+ let udp=Arc::new(UdpSocket::from_std(std_udp)?);let local=udp.local_addr()?;
+ let (mut packets,queue_dropped)=spawn_udp_reader(Arc::clone(&udp));
  let mut rtc=Rtc::new(Instant::now());rtc.add_local_candidate(Candidate::host(local,"udp").map_err(|e|anyhow!("{e}"))?);
  let mut control=None;let mut message=None;let mut input=None;
  let (video_mid,offer,pending)={
@@ -368,7 +400,7 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
  let idle_keepalive_enabled=std::env::var("IDLE_KEEPALIVE").map(|v|v.trim()!="0").unwrap_or(true);
  let mut pad=PadPulse::default();let mut recenter_at:Option<Instant>=None;let mut seen:HashMap<String,u32>=HashMap::new();
  let started=Instant::now();let mut vf=0u64;let mut af=0u64;let mut vb=0u64;let mut ab=0u64;let mut keyframes=0u64;
- let mut connected=false;let mut handshake=false;let mut buf=vec![0u8;65536];
+ let mut connected=false;let mut handshake=false;let mut last_queue_dropped=0u64;
  // 循环偶尔被卡住时，错过的 tick 不补发，否则手柄动作的每一步会被挤在一起
  let mut tick=tokio::time::interval(Duration::from_millis(500));tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
  let mut last_print=Instant::now();
@@ -406,7 +438,10 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
    }
   };
   if last_print.elapsed()>Duration::from_secs(5){
-   log!("MEDIA video_frames={} audio_packets={} video_bytes={} audio_bytes={} keyframes={}",vf,af,vb,ab,keyframes);
+   // 队列丢包数是判断「主循环是否处理不过来」的直接证据：一直是 0 才正常
+ let queue_dropped=queue_dropped.load(std::sync::atomic::Ordering::Relaxed);
+ log!("MEDIA video_frames={} audio_packets={} video_bytes={} audio_bytes={} keyframes={} queue_dropped={}",vf,af,vb,ab,keyframes,queue_dropped);
+ if queue_dropped>last_queue_dropped{log!("UDP_QUEUE_DROPPED total={queue_dropped}");last_queue_dropped=queue_dropped;}
    xsx_native::health::update(if vf>0&&af>0{"streaming"}else{"connecting"},serde_json::json!({"control_revision":revision,"video_frames":vf,"audio_packets":af,"video_bytes":vb,"audio_bytes":ab,"keyframes":keyframes,"elapsed_seconds":started.elapsed().as_secs(),"lan_peer":peer_ip.map(|peer|peer.to_string()).unwrap_or_else(||"pending".into())}))?;
    last_print=Instant::now();
   }
@@ -415,7 +450,7 @@ async fn receive(client:&XHomeClient,path:&str,revision:u64,power_off:tokio::syn
   if !connected&&started.elapsed()>Duration::from_secs(25){bail!("LAN connection timed out");}
   if connected&&last_video.elapsed()>Duration::from_secs(20){bail!("Video receive watchdog timed out");}
   tokio::select!{
-   r=udp.recv_from(&mut buf)=>{let(n,src)=r?;if peer_ip.is_none_or(|peer|src.ip()==peer){let input=Receive::new(Protocol::Udp,src,local,&buf[..n]).map_err(|e|anyhow!("{e}"))?;rtc.handle_input(Input::Receive(Instant::now(),input)).map_err(|e|anyhow!("{e}"))?;}}
+   p=packets.recv()=>{let Some((data,src))=p else{bail!("UDP reader stopped");};if peer_ip.is_none_or(|peer|src.ip()==peer){let input=Receive::new(Protocol::Udp,src,local,&data).map_err(|e|anyhow!("{e}"))?;rtc.handle_input(Input::Receive(Instant::now(),input)).map_err(|e|anyhow!("{e}"))?;}}
    // 微脉冲只保持一小会儿就回中，不等下一个 tick
    _=tokio::time::sleep(recenter_at.unwrap_or_else(Instant::now).saturating_duration_since(Instant::now())),if recenter_at.is_some()=>{
     send_gamepad(&mut rtc,input,&mut input_seq,&xsx_native::rtc::input::GamepadFrame::neutral(),started.elapsed());
@@ -596,5 +631,31 @@ mod tests {
         assert_eq!(session_with_console(Some("10.0.0.1"),Some(0)).console_ipv4_endpoint(),None);
         assert_eq!(session_with_console(Some("192.168.1.10"),Some(9004)).console_ipv4_endpoint(),Some(("192.168.1.10".parse().unwrap(),9004)));
         assert_eq!(session_with_console(Some("203.0.113.5"),Some(9002)).console_ipv4_endpoint(),None,"公网地址不算");
+    }
+
+    // 真实节奏下验证收包任务 + 队列：按 30 Mbps 均匀发包（每秒约 3100 个 1200 字节的包），共 3 秒，
+    // 消费者每个包故意慢处理 2 毫秒（比正常慢得多，模拟 NAS 忙）。
+    // 期望：包一个不丢，全部积压在用户态队列里等消费者慢慢处理。
+    // 对照（不限速的洪水）：内核那 200KB 缓冲无论用户态多快都扛不住，所以这个测试必须按真实节奏发
+    #[tokio::test(flavor="multi_thread",worker_threads=4)]
+    async fn udp_queue_absorbs_a_paced_stream(){
+        const SECONDS:u64=3;const PACKET_BYTES:usize=1200;const BITRATE:u64=30_000_000;
+        const PACKETS:u64=BITRATE/8*SECONDS/PACKET_BYTES as u64;   // 约 9375
+        let queued=tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let target=queued.local_addr().unwrap();
+        let (mut rx,dropped)=spawn_udp_reader(Arc::new(queued));
+        let sender=tokio::spawn(async move{
+            let sender=tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let payload=vec![0u8;PACKET_BYTES];
+            let interval=Duration::from_micros(SECONDS*1_000_000/PACKETS);
+            let mut pace=tokio::time::interval(interval);
+            for _ in 0..PACKETS{pace.tick().await;sender.send_to(&payload,target).await.unwrap();}
+        });
+        let mut received=0u64;
+        // 消费者每包 2ms，9375 个包要 18.75 秒才处理完；给 40 秒
+        let ok=tokio::time::timeout(Duration::from_secs(40),async{while received<PACKETS{if rx.recv().await.is_none(){break;}received+=1;tokio::time::sleep(Duration::from_millis(2)).await;}}).await.is_ok();
+        sender.abort();
+        let dropped_count=dropped.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(ok&&received==PACKETS,"应当一个不丢：收到 {received}/{PACKETS}，队列满丢弃 {dropped_count}");
     }
 }
